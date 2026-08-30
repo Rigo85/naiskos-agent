@@ -1,0 +1,18 @@
+[Unit]
+Description=Naiskos local health metrics snapshot
+Documentation=file:///opt/naiskos/docs/procedimiento-prueba-prolongada-y-diagnostico.md
+After=naiskos-agent.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/naiskos/bin/naiskos-diagnostics sample
+User=root
+Group=root
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true

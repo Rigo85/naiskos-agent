@@ -1,0 +1,2 @@
+# Naiskos runs as a dedicated kiosk and never stores application secrets in Chromium.
+export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --ozone-platform=wayland --password-store=basic --enable-wayland-ime --touch-events=enabled"

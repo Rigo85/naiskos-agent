@@ -1,0 +1,88 @@
+#!/bin/sh
+
+set -u
+
+NAISKOS_KIOSK_URL="${NAISKOS_KIOSK_URL:-http://127.0.0.1:8080/}"
+NAISKOS_PROFILE_ROOT="${XDG_STATE_HOME:-${HOME}/.local/state}/naiskos/chromium"
+NAISKOS_CONTROL_URL="${NAISKOS_KIOSK_URL}api/v1/system/control"
+NAISKOS_LOCK_FILE="${XDG_RUNTIME_DIR:-/tmp}/naiskos-kiosk.lock"
+
+mkdir -p "${NAISKOS_PROFILE_ROOT}"
+exec 9>"${NAISKOS_LOCK_FILE}"
+/usr/bin/flock --nonblock 9 || exit 0
+
+read_control() {
+  /usr/bin/curl --fail --silent --show-error --max-time 2 "${NAISKOS_CONTROL_URL}"
+}
+
+while :; do
+  until /usr/bin/curl --fail --silent --show-error \
+    --max-time 2 "${NAISKOS_KIOSK_URL}api/v1/health" >/dev/null 2>&1; do
+    sleep 1
+  done
+
+  control="$(read_control 2>/dev/null || true)"
+  control_sequence="${control%%:*}"
+
+  if [ "${NAISKOS_USE_INHIBIT:-1}" = "1" ]; then
+    /usr/bin/setsid /usr/bin/systemd-inhibit \
+      --what=idle:sleep \
+      --who=Naiskos \
+      --why="Visualizador en modo kiosco" \
+      /usr/bin/chromium \
+        --kiosk \
+        --no-first-run \
+        --no-default-browser-check \
+        --noerrdialogs \
+        --disable-session-crashed-bubble \
+        --disable-translate \
+        --disable-features=Translate,TranslateUI \
+        --autoplay-policy=no-user-gesture-required \
+        --lang=es-ES \
+        --accept-lang=es-ES,es \
+        --user-data-dir="${NAISKOS_PROFILE_ROOT}" \
+        "${NAISKOS_KIOSK_URL}" &
+  else
+    /usr/bin/setsid /usr/bin/chromium \
+      --kiosk \
+      --no-first-run \
+      --no-default-browser-check \
+      --noerrdialogs \
+      --disable-session-crashed-bubble \
+      --disable-translate \
+      --disable-features=Translate,TranslateUI \
+      --autoplay-policy=no-user-gesture-required \
+      --lang=es-ES \
+      --accept-lang=es-ES,es \
+      --user-data-dir="${NAISKOS_PROFILE_ROOT}" \
+      "${NAISKOS_KIOSK_URL}" &
+  fi
+  kiosk_pid=$!
+
+  while /usr/bin/kill -0 "${kiosk_pid}" 2>/dev/null; do
+    sleep 1
+    next_control="$(read_control 2>/dev/null || true)"
+    [ -n "${next_control}" ] || continue
+    next_sequence="${next_control%%:*}"
+    next_action="${next_control#*:}"
+    [ "${next_sequence}" != "${control_sequence}" ] || continue
+    control_sequence="${next_sequence}"
+
+    case "${next_action}" in
+      exit)
+        /usr/bin/kill -TERM "-${kiosk_pid}" 2>/dev/null || true
+        wait "${kiosk_pid}" 2>/dev/null || true
+        exit 0
+        ;;
+      poweroff)
+        if /usr/bin/systemctl poweroff; then
+          exit 0
+        fi
+        ;;
+    esac
+  done
+
+  wait "${kiosk_pid}" 2>/dev/null || true
+
+  sleep 2
+done

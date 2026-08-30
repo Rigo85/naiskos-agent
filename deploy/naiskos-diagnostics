@@ -1,0 +1,287 @@
+#!/bin/sh
+
+set -eu
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+METRICS_TAG=naiskos-metrics
+MARKER_TAG=naiskos-test-marker
+DIAGNOSTICS_ROOT=/var/log/naiskos/diagnostics
+
+read_meminfo() {
+  awk -v field="$1" '$1 == field ":" { print $2; exit }' /proc/meminfo
+}
+
+process_sum() {
+  command_name=$1
+  column=$2
+  ps -C "$command_name" -o "$column=" 2>/dev/null | awk '{ sum += $1 } END { printf "%.0f", sum + 0 }'
+}
+
+process_count() {
+  command_name=$1
+  ps -C "$command_name" -o pid= 2>/dev/null | awk 'NF { count++ } END { print count + 0 }'
+}
+
+release_from_link() {
+  target=$(readlink -f "$1" 2>/dev/null || true)
+  if [ -n "$target" ]; then
+    basename "$(dirname "$target")"
+  else
+    printf 'unknown\n'
+  fi
+}
+
+temperature_celsius() {
+  value=$(/usr/bin/vcgencmd measure_temp 2>/dev/null | sed -n "s/^temp=\([0-9.]*\).*/\1/p")
+  if [ -n "$value" ]; then
+    printf '%s\n' "$value"
+    return
+  fi
+
+  if [ -r /sys/class/thermal/thermal_zone0/temp ]; then
+    awk '{ printf "%.1f\n", $1 / 1000 }' /sys/class/thermal/thermal_zone0/temp
+  else
+    printf 'unknown\n'
+  fi
+}
+
+collect_sample() {
+  timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  uptime_seconds=$(awk '{ printf "%.0f", $1 }' /proc/uptime)
+  temperature=$(temperature_celsius)
+  throttled=$(/usr/bin/vcgencmd get_throttled 2>/dev/null | sed 's/^throttled=//' || true)
+  [ -n "$throttled" ] || throttled=unknown
+
+  mem_total=$(read_meminfo MemTotal)
+  mem_available=$(read_meminfo MemAvailable)
+  mem_used=$((mem_total - mem_available))
+  swap_total=$(read_meminfo SwapTotal)
+  swap_free=$(read_meminfo SwapFree)
+  swap_used=$((swap_total - swap_free))
+
+  set -- $(df -Pk /var/lib/naiskos | awk 'NR == 2 { print $2, $3, $4, $5 }')
+  disk_total_kib=${1:-0}
+  disk_used_kib=${2:-0}
+  disk_available_kib=${3:-0}
+  disk_used_percent=${4:-unknown}
+  media_kib=$(du -sk /var/lib/naiskos/media 2>/dev/null | awk '{ print $1 + 0 }')
+
+  agent_state=$(systemctl is-active naiskos-agent.service 2>/dev/null || true)
+  [ -n "$agent_state" ] || agent_state=unknown
+  agent_pid=$(systemctl show naiskos-agent.service --property=MainPID --value 2>/dev/null || true)
+  case "$agent_pid" in
+    ''|0) agent_rss_kib=0; agent_cpu_percent=0; agent_elapsed_seconds=0 ;;
+    *)
+      agent_rss_kib=$(ps -p "$agent_pid" -o rss= 2>/dev/null | awk '{ print $1 + 0 }')
+      agent_cpu_percent=$(ps -p "$agent_pid" -o %cpu= 2>/dev/null | awk '{ print $1 + 0 }')
+      agent_elapsed_seconds=$(ps -p "$agent_pid" -o etimes= 2>/dev/null | awk '{ print $1 + 0 }')
+      ;;
+  esac
+
+  chromium_processes=$(process_count chromium)
+  chromium_rss_kib=$(process_sum chromium rss)
+  chromium_cpu_percent=$(ps -C chromium -o %cpu= 2>/dev/null | awk '{ sum += $1 } END { printf "%.1f", sum + 0 }')
+  kiosk_launchers=$(pgrep -fc '[s]tart-naiskos-kiosk' 2>/dev/null || true)
+  [ -n "$kiosk_launchers" ] || kiosk_launchers=0
+
+  health=$(/usr/bin/curl --fail --silent --show-error --max-time 3 http://127.0.0.1:8080/api/v1/health 2>/dev/null || true)
+  if [ -n "$health" ]; then
+    health_ok=true
+    manifest_version=$(printf '%s' "$health" | sed -n 's/.*"manifestVersion":\([0-9][0-9]*\).*/\1/p')
+    agent_mode=$(printf '%s' "$health" | sed -n 's/.*"state":"\([^"]*\)".*/\1/p')
+  else
+    health_ok=false
+    manifest_version=unknown
+    agent_mode=unknown
+  fi
+  [ -n "$manifest_version" ] || manifest_version=unknown
+  [ -n "$agent_mode" ] || agent_mode=unknown
+
+  load_average=$(awk '{ print $1 "," $2 "," $3 }' /proc/loadavg)
+  ntp_synchronized=$(timedatectl show --property=NTPSynchronized --value 2>/dev/null || true)
+  [ -n "$ntp_synchronized" ] || ntp_synchronized=unknown
+  drm_connected=$(grep -l '^connected$' /sys/class/drm/*/status 2>/dev/null | wc -l)
+  audio_cards=$(awk '/^[[:space:]]*[0-9]+ \[/ { count++ } END { print count + 0 }' /proc/asound/cards 2>/dev/null || printf '0\n')
+  default_route=$(ip route show default 2>/dev/null | awk 'NR == 1 { print "present" }')
+  [ -n "$default_route" ] || default_route=absent
+  viewer_release=$(release_from_link /opt/naiskos/browser)
+  agent_release=$(release_from_link /opt/naiskos/agent)
+
+  line="timestamp=$timestamp uptime_s=$uptime_seconds temp_c=$temperature throttled=$throttled load=$load_average mem_total_kib=$mem_total mem_used_kib=$mem_used mem_available_kib=$mem_available swap_total_kib=$swap_total swap_used_kib=$swap_used disk_total_kib=$disk_total_kib disk_used_kib=$disk_used_kib disk_available_kib=$disk_available_kib disk_used_percent=$disk_used_percent media_kib=$media_kib agent_state=$agent_state agent_mode=$agent_mode agent_pid=${agent_pid:-0} agent_rss_kib=$agent_rss_kib agent_cpu_percent=$agent_cpu_percent agent_elapsed_s=$agent_elapsed_seconds health_ok=$health_ok manifest_version=$manifest_version chromium_processes=$chromium_processes chromium_rss_kib=$chromium_rss_kib chromium_cpu_percent=$chromium_cpu_percent kiosk_launchers=$kiosk_launchers drm_connected=$drm_connected audio_cards=$audio_cards ntp_synchronized=$ntp_synchronized default_route=$default_route viewer_release=$viewer_release agent_release=$agent_release"
+
+  logger --priority daemon.info --tag "$METRICS_TAG" -- "$line"
+  printf '%s\n' "$line"
+}
+
+validate_label() {
+  value=$1
+  case "$value" in
+    ''|*[!A-Za-z0-9._-]*)
+      printf 'La etiqueta sólo puede contener letras, números, punto, guion y guion bajo.\n' >&2
+      exit 2
+      ;;
+  esac
+}
+
+mark_test() {
+  phase=${1:-}
+  label=${2:-}
+  case "$phase" in
+    start|end|incident|note) ;;
+    *) printf 'Fase inválida: usa start, end, incident o note.\n' >&2; exit 2 ;;
+  esac
+  validate_label "$label"
+  line="timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ) phase=$phase label=$label"
+  logger --priority daemon.notice --tag "$MARKER_TAG" -- "$line"
+  printf '%s\n' "$line"
+}
+
+write_system_summary() {
+  output=$1
+  {
+    printf 'generated_at_utc='; date -u +%Y-%m-%dT%H:%M:%SZ
+    printf 'hostname='; hostname
+    printf 'uptime='; uptime
+    printf 'viewer_release='; release_from_link /opt/naiskos/browser
+    printf 'agent_release='; release_from_link /opt/naiskos/agent
+    printf '\n[operating-system]\n'
+    cat /etc/os-release
+    printf '\n[kernel]\n'
+    uname -a
+    printf '\n[model]\n'
+    tr -d '\000' </proc/device-tree/model 2>/dev/null || true
+    printf '\n\n[temperature-and-throttling]\n'
+    /usr/bin/vcgencmd measure_temp 2>/dev/null || true
+    /usr/bin/vcgencmd get_throttled 2>/dev/null || true
+    printf '\n[memory]\n'
+    free -k
+    printf '\n[storage]\n'
+    df -h / /var/lib/naiskos
+    du -sh /var/lib/naiskos/media 2>/dev/null || true
+    printf '\n[time]\n'
+    timedatectl status 2>/dev/null || true
+  } >"$output" 2>&1
+}
+
+write_hardware_summary() {
+  output=$1
+  {
+    printf '[display-connectors]\n'
+    for status_file in /sys/class/drm/*/status; do
+      [ -r "$status_file" ] || continue
+      connector=$(basename "$(dirname "$status_file")")
+      printf '%s=' "$connector"
+      cat "$status_file"
+    done
+    printf '\n[display-modes]\n'
+    for modes_file in /sys/class/drm/*/modes; do
+      [ -r "$modes_file" ] || continue
+      connector=$(basename "$(dirname "$modes_file")")
+      printf '%s:\n' "$connector"
+      sed 's/^/  /' "$modes_file"
+    done
+    printf '\n[audio-cards]\n'
+    cat /proc/asound/cards 2>/dev/null || true
+    printf '\n[audio-devices]\n'
+    cat /proc/asound/devices 2>/dev/null || true
+  } >"$output" 2>&1
+}
+
+create_bundle() {
+  label=${1:-manual}
+  hours=${2:-24}
+  validate_label "$label"
+  case "$hours" in
+    ''|*[!0-9]*) printf 'Las horas deben ser un entero entre 1 y 168.\n' >&2; exit 2 ;;
+  esac
+  if [ "$hours" -lt 1 ] || [ "$hours" -gt 168 ]; then
+    printf 'Las horas deben estar entre 1 y 168.\n' >&2
+    exit 2
+  fi
+
+  install -d -m 0750 -o root -g adm "$DIAGNOSTICS_ROOT"
+  temp_root=$(mktemp -d /var/tmp/naiskos-diagnostics.XXXXXX)
+  trap 'rm -rf -- "$temp_root"' EXIT HUP INT TERM
+  timestamp=$(date -u +%Y%m%dT%H%M%SZ)
+  bundle="$DIAGNOSTICS_ROOT/naiskos-diagnostics-$timestamp-$label.tar.gz"
+
+  collect_sample >"$temp_root/final-sample.txt"
+  write_system_summary "$temp_root/system-summary.txt"
+  write_hardware_summary "$temp_root/hardware-summary.txt"
+
+  journalctl --since "$hours hours ago" --identifier "$METRICS_TAG" --output=short-iso --no-pager >"$temp_root/metrics.log" 2>&1 || true
+  journalctl --since "$hours hours ago" --identifier "$MARKER_TAG" --output=short-iso --no-pager >"$temp_root/test-markers.log" 2>&1 || true
+  journalctl --since "$hours hours ago" --unit naiskos-agent.service --output=short-iso --no-pager >"$temp_root/naiskos-agent.log" 2>&1 || true
+  journalctl --since "$hours hours ago" --priority warning..alert --output=short-iso --no-pager >"$temp_root/system-warnings.log" 2>&1 || true
+  journalctl --since "$hours hours ago" --dmesg --output=short-iso --no-pager >"$temp_root/kernel.log" 2>&1 || true
+
+  {
+    systemctl status naiskos-agent.service naiskos-metrics.timer naiskos-metrics.service --no-pager || true
+    printf '\n[failed-units]\n'
+    systemctl --failed --no-pager || true
+  } >"$temp_root/systemd-status.txt" 2>&1
+
+  ps -eo pid,ppid,pgid,etimes,%cpu,%mem,rss,stat,comm --sort=-rss >"$temp_root/processes.txt" 2>&1
+  {
+    printf '[addresses]\n'
+    ip -brief address
+    printf '\n[routes]\n'
+    ip route
+    printf '\n[resolver]\n'
+    resolvectl status 2>/dev/null || true
+  } >"$temp_root/network.txt" 2>&1
+
+  /usr/bin/curl --silent --show-error --max-time 3 http://127.0.0.1:8080/api/v1/health >"$temp_root/agent-health.json" 2>&1 || true
+  apt list --upgradable >"$temp_root/pending-packages.txt" 2>&1 || true
+  journalctl --disk-usage >"$temp_root/journal-usage.txt" 2>&1 || true
+
+  viewer_release_path=$(readlink -f /opt/naiskos/browser 2>/dev/null || true)
+  if [ -n "$viewer_release_path" ] && [ -r "$(dirname "$viewer_release_path")/release.json" ]; then
+    cp "$(dirname "$viewer_release_path")/release.json" "$temp_root/viewer-release.json"
+  fi
+  agent_release_path=$(readlink -f /opt/naiskos/agent 2>/dev/null || true)
+  if [ -n "$agent_release_path" ] && [ -r "$(dirname "$agent_release_path")/release.json" ]; then
+    cp "$(dirname "$agent_release_path")/release.json" "$temp_root/agent-release.json"
+  fi
+
+  umask 0027
+  tar -czf "$bundle.tmp" -C "$temp_root" .
+  chown root:adm "$bundle.tmp"
+  chmod 0640 "$bundle.tmp"
+  mv "$bundle.tmp" "$bundle"
+  printf '%s\n' "$bundle"
+}
+
+show_status() {
+  printf 'timer='; systemctl is-active naiskos-metrics.timer 2>/dev/null || true
+  printf 'timer_enabled='; systemctl is-enabled naiskos-metrics.timer 2>/dev/null || true
+  printf 'journal_persistent='
+  if find /var/log/journal -type f -name '*.journal*' -print -quit 2>/dev/null | grep -q .; then
+    printf 'yes\n'
+  else
+    printf 'no\n'
+  fi
+  printf 'journal_usage='; journalctl --disk-usage 2>/dev/null | sed 's/^Archived and active journals take up //'
+  earliest_sample=$(journalctl --identifier "$METRICS_TAG" --output=cat --no-pager 2>/dev/null | sed -n '1p')
+  printf 'earliest_sample=%s\n' "${earliest_sample:-none}"
+  printf 'latest_sample='; journalctl --identifier "$METRICS_TAG" --lines 1 --output=cat --no-pager 2>/dev/null || printf 'none\n'
+}
+
+usage() {
+  cat <<'EOF'
+Uso:
+  naiskos-diagnostics sample
+  naiskos-diagnostics mark start|end|incident|note ETIQUETA
+  naiskos-diagnostics bundle [ETIQUETA] [HORAS_1_A_168]
+  naiskos-diagnostics status
+EOF
+}
+
+command=${1:-status}
+case "$command" in
+  sample) collect_sample ;;
+  mark) shift; mark_test "${1:-}" "${2:-}" ;;
+  bundle) shift; create_bundle "${1:-manual}" "${2:-24}" ;;
+  status) show_status ;;
+  *) usage >&2; exit 2 ;;
+esac

@@ -1,0 +1,22 @@
+[Unit]
+Description=Naiskos local agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=naiskos
+Group=naiskos
+EnvironmentFile=/etc/naiskos/agent.env
+WorkingDirectory=/opt/naiskos/agent
+ExecStart=/opt/node24/bin/node /opt/naiskos/agent/dist/main.js
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/naiskos
+
+[Install]
+WantedBy=multi-user.target

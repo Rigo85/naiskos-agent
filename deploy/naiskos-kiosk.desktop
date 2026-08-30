@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Naiskos Kiosk
+Comment=Inicia el visualizador Naiskos a pantalla completa
+Exec=/opt/naiskos/bin/start-naiskos-kiosk
+Terminal=false
+X-GNOME-Autostart-enabled=true

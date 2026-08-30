@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+data/
+browser/
+*.log
+diagnostics/
+*.tar.gz

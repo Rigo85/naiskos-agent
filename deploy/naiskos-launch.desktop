@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Iniciar Naiskos
+Comment=Abre el visualizador de fotografías a pantalla completa
+Exec=/opt/naiskos/bin/start-naiskos-kiosk
+Icon=/usr/local/share/pixmaps/naiskos.png
+Terminal=false
+StartupNotify=false
+Categories=Graphics;Viewer;

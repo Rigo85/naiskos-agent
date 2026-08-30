@@ -1,0 +1,8 @@
+polkit.addRule(function(action, subject) {
+  if (
+    action.id == "org.freedesktop.NetworkManager.wifi.scan" &&
+    subject.user == "naiskos"
+  ) {
+    return polkit.Result.YES;
+  }
+});

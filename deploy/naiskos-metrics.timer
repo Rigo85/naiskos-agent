@@ -1,0 +1,14 @@
+[Unit]
+Description=Collect Naiskos local health metrics every five minutes
+Documentation=file:///opt/naiskos/docs/procedimiento-prueba-prolongada-y-diagnostico.md
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=15s
+RandomizedDelaySec=30s
+Persistent=true
+Unit=naiskos-metrics.service
+
+[Install]
+WantedBy=timers.target
