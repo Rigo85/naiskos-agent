@@ -10,6 +10,7 @@ import {
 import { SyncEngine } from "./sync-engine.js";
 import { EMPTY_WEATHER, LocalManifest, WeatherSnapshot } from "./types.js";
 import { emptyManifest } from "./validation.js";
+import { errorForLog } from "./logging.js";
 
 const config = loadConfig();
 await loadProvisionedCredentials(config);
@@ -32,23 +33,67 @@ await app.listen({ host: config.host, port: config.port });
 
 void provisioning
   .initialize()
-  .catch((error) => app.log.warn({ error }, "Alta del dispositivo pendiente"));
+  .catch((error) =>
+    app.log.warn({ err: errorForLog(error) }, "Alta del dispositivo pendiente"),
+  );
 
 const syncTimer = setInterval(() => {
   void engine
     .sync()
-    .catch((error) => app.log.warn({ error }, "Sincronización fallida"));
+    .catch((error) =>
+      app.log.warn({ err: errorForLog(error) }, "Sincronización fallida"),
+    );
 }, config.syncIntervalMs);
 syncTimer.unref();
 const provisioningTimer = setInterval(() => {
   void provisioning
     .refresh()
-    .catch((error) => app.log.warn({ error }, "Consulta de alta fallida"));
+    .catch((error) =>
+      app.log.warn({ err: errorForLog(error) }, "Consulta de alta fallida"),
+    );
 }, config.syncIntervalMs);
 provisioningTimer.unref();
 void engine
   .sync()
-  .catch((error) => app.log.warn({ error }, "Sincronización inicial fallida"));
+  .catch((error) =>
+    app.log.warn({ err: errorForLog(error) }, "Sincronización inicial fallida"),
+  );
+
+let terminatingAfterFatalError = false;
+
+function fatalAndExit(error: unknown, message: string): void {
+  if (terminatingAfterFatalError) return;
+  terminatingAfterFatalError = true;
+  app.log.fatal({ err: errorForLog(error) }, message);
+
+  const logger = app.log as typeof app.log & {
+    flush?: (callback?: (error?: Error) => void) => void;
+  };
+  if (!logger.flush) {
+    process.exit(1);
+    return;
+  }
+
+  // El callback confirma que Pino entregó el evento. El límite evita dejar un
+  // proceso fatal colgado si el destino de logs también está averiado.
+  const forcedExit = setTimeout(() => process.exit(1), 1_000);
+  try {
+    logger.flush(() => {
+      clearTimeout(forcedExit);
+      process.exit(1);
+    });
+  } catch {
+    clearTimeout(forcedExit);
+    process.exit(1);
+  }
+}
+
+process.on("uncaughtException", (error) =>
+  fatalAndExit(error, "Excepción no controlada"),
+);
+process.on("unhandledRejection", (reason) =>
+  fatalAndExit(reason, "Promesa rechazada sin controlador"),
+);
 
 async function shutdown(signal: string): Promise<void> {
   clearInterval(syncTimer);

@@ -145,6 +145,28 @@ están fijados en este repositorio.
 - El journal persistente de referencia se limita a 128 MiB y 14 días mediante
   `deploy/60-naiskos-persistent-journal.conf`.
 
+Los errores se registran en el campo estructurado `err`, que conserva tipo,
+mensaje, stack y cadena de causas. Los rechazos que no sean objetos `Error` se
+normalizan y sus campos sensibles se ocultan. Las excepciones o promesas no
+controladas se escriben con nivel fatal y se vacía el búfer del logger antes de
+que systemd reinicie el agente.
+
+El estado del agente y las muestras de diagnóstico usan la misma convención de
+almacenamiento:
+
+- `diskTotalBytes`: capacidad completa del filesystem;
+- `diskUsedBytes`: bloques realmente ocupados;
+- `diskAvailableBytes`: espacio utilizable por el agente sin privilegios;
+- `diskReservedBytes`: espacio libre reservado por el filesystem;
+- `diskUsedPercent`: `usado / (usado + disponible)`, equivalente a `df`;
+- `frameDataBytes`: bloques ocupados por todo `NAISKOS_DATA_ROOT`;
+- `mediaDataBytes`: parte anterior correspondiente al directorio `media/`.
+
+El recorrido de la data se actualiza cada cinco minutos y después de instalar
+contenido nuevo; la consulta barata del filesystem ocurre en cada ciclo. El
+servicio de métricas descarta su salida estándar porque cada muestra ya se
+envía una vez al journal con el identificador `naiskos-metrics`.
+
 El historial técnico del piloto está en
 [`docs/piloto-rpi-2026-08-29.md`](docs/piloto-rpi-2026-08-29.md); no sustituye la
 validación del hardware concreto donde vaya a instalarse.

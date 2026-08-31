@@ -9,6 +9,7 @@ import { ProvisioningManager } from "./provisioning.js";
 import { SyncEngine } from "./sync-engine.js";
 import { FitMode } from "./types.js";
 import { normalizeSettings } from "./validation.js";
+import { errorForLog } from "./logging.js";
 
 type SystemAction = "exit" | "poweroff";
 
@@ -18,7 +19,25 @@ export async function buildApp(
   provisioning?: ProvisioningManager,
 ): Promise<FastifyInstance> {
   const app = Fastify({
-    logger: true,
+    logger: {
+      redact: {
+        paths: [
+          "authorization",
+          "cookie",
+          "password",
+          "secret",
+          "token",
+          "req.headers.authorization",
+          "req.headers.cookie",
+          "err.authorization",
+          "err.cookie",
+          "err.password",
+          "err.secret",
+          "err.token",
+        ],
+        censor: "[REDACTED]",
+      },
+    },
     logController: new LogController({ disableRequestLogging: true }),
     trustProxy: false,
     bodyLimit: 128 * 1024,
@@ -204,7 +223,10 @@ export async function buildApp(
       rotationDegrees,
     });
     void engine.sync().catch((error) =>
-      request.log.warn({ error }, "Rotación pendiente de sincronización"),
+      request.log.warn(
+        { err: errorForLog(error) },
+        "Rotación pendiente de sincronización",
+      ),
     );
     return reply.code(202).send({ accepted: true, rotationDegrees });
   });
@@ -222,7 +244,10 @@ export async function buildApp(
         mediaId: found.id,
       });
       void engine.sync().catch((error) =>
-        request.log.warn({ error }, "Eliminación pendiente de sincronización"),
+        request.log.warn(
+          { err: errorForLog(error) },
+          "Eliminación pendiente de sincronización",
+        ),
       );
       return reply.code(202).send({ accepted: true });
     },

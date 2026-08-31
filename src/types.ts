@@ -103,7 +103,13 @@ export interface AgentStatus {
   manifestVersion: number;
   lastSyncAt: string | null;
   lastError: string | null;
+  diskTotalBytes: number;
+  diskUsedBytes: number;
+  diskAvailableBytes: number;
+  diskReservedBytes: number;
   diskUsedPercent: number;
+  frameDataBytes: number;
+  mediaDataBytes: number;
 }
 
 export const DEFAULT_SETTINGS: FrameSettings = {

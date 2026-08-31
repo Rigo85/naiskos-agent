@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { access, mkdir, readdir, rename, rm, statfs } from "node:fs/promises";
+import { access, mkdir, readdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -21,6 +21,10 @@ import {
   validateWeatherSnapshot,
 } from "./validation.js";
 import { scanWifiAccessPoints } from "./wifi-scan.js";
+import {
+  collectFileSystemUsage,
+  collectFrameDataUsage,
+} from "./storage-usage.js";
 
 export class SyncEngine {
   readonly manifestFile: string;
@@ -31,6 +35,7 @@ export class SyncEngine {
   private outboxChain: Promise<unknown> = Promise.resolve();
   private manifestChain: Promise<unknown> = Promise.resolve();
   private nextWeatherSyncAt = 0;
+  private nextDataUsageScanAt = 0;
 
   constructor(
     private readonly config: AgentConfig,
@@ -62,7 +67,13 @@ export class SyncEngine {
       manifestVersion: this.manifest.version,
       lastSyncAt: null,
       lastError: null,
+      diskTotalBytes: 0,
+      diskUsedBytes: 0,
+      diskAvailableBytes: 0,
+      diskReservedBytes: 0,
       diskUsedPercent: 0,
+      frameDataBytes: 0,
+      mediaDataBytes: 0,
     };
   }
 
@@ -148,7 +159,7 @@ export class SyncEngine {
       } catch (error) {
         outboxError = error;
       }
-      this.status.diskUsedPercent = await this.diskUsedPercent();
+      await this.refreshStorageUsage();
       if (this.status.diskUsedPercent >= this.config.diskBlockPercent) {
         this.status.state = "storage-blocked";
         this.status.lastError = `Almacenamiento al ${this.status.diskUsedPercent.toFixed(1)}%`;
@@ -186,6 +197,7 @@ export class SyncEngine {
       }
       const local = await this.materialize(remote, token);
       await this.installRemoteManifest(remote, local);
+      await this.refreshStorageUsage(true);
       this.markSuccess();
       return "updated";
     } catch (error) {
@@ -475,10 +487,15 @@ export class SyncEngine {
     }
   }
 
-  private async diskUsedPercent(): Promise<number> {
+  private async refreshStorageUsage(forceDataScan = false): Promise<void> {
     await mkdir(this.config.dataRoot, { recursive: true });
-    const stats = await statfs(this.config.dataRoot);
-    if (stats.blocks === 0) return 0;
-    return (1 - Number(stats.bavail) / Number(stats.blocks)) * 100;
+    Object.assign(this.status, await collectFileSystemUsage(this.config.dataRoot));
+    if (forceDataScan || this.nextDataUsageScanAt <= Date.now()) {
+      Object.assign(
+        this.status,
+        await collectFrameDataUsage(this.config.dataRoot, this.mediaRoot),
+      );
+      this.nextDataUsageScanAt = Date.now() + 5 * 60_000;
+    }
   }
 }

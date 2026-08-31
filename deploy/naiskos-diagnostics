@@ -45,6 +45,19 @@ temperature_celsius() {
   fi
 }
 
+json_number() {
+  key=$1
+  printf '%s' "$health" | sed -n "s/.*\"$key\":\([0-9][0-9.]*\).*/\1/p"
+}
+
+bytes_to_kib() {
+  value=$1
+  case "$value" in
+    ''|*[!0-9]*) return 1 ;;
+    *) printf '%s\n' "$((value / 1024))" ;;
+  esac
+}
+
 collect_sample() {
   timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   uptime_seconds=$(awk '{ printf "%.0f", $1 }' /proc/uptime)
@@ -63,8 +76,11 @@ collect_sample() {
   disk_total_kib=${1:-0}
   disk_used_kib=${2:-0}
   disk_available_kib=${3:-0}
-  disk_used_percent=${4:-unknown}
-  media_kib=$(du -sk /var/lib/naiskos/media 2>/dev/null | awk '{ print $1 + 0 }')
+  disk_used_percent=$(printf '%s' "${4:-unknown}" | tr -d '%')
+  disk_reserved_kib=$((disk_total_kib - disk_used_kib - disk_available_kib))
+  [ "$disk_reserved_kib" -ge 0 ] || disk_reserved_kib=0
+  frame_data_kib=$(du -sk /var/lib/naiskos 2>/dev/null | awk '{ print $1 + 0 }')
+  media_data_kib=$(du -sk /var/lib/naiskos/media 2>/dev/null | awk '{ print $1 + 0 }')
 
   agent_state=$(systemctl is-active naiskos-agent.service 2>/dev/null || true)
   [ -n "$agent_state" ] || agent_state=unknown
@@ -89,6 +105,20 @@ collect_sample() {
     health_ok=true
     manifest_version=$(printf '%s' "$health" | sed -n 's/.*"manifestVersion":\([0-9][0-9]*\).*/\1/p')
     agent_mode=$(printf '%s' "$health" | sed -n 's/.*"state":"\([^"]*\)".*/\1/p')
+    health_disk_total=$(json_number diskTotalBytes)
+    health_disk_used=$(json_number diskUsedBytes)
+    health_disk_available=$(json_number diskAvailableBytes)
+    health_disk_reserved=$(json_number diskReservedBytes)
+    health_disk_percent=$(json_number diskUsedPercent)
+    health_frame_data=$(json_number frameDataBytes)
+    health_media_data=$(json_number mediaDataBytes)
+    disk_total_kib=$(bytes_to_kib "$health_disk_total" || printf '%s' "$disk_total_kib")
+    disk_used_kib=$(bytes_to_kib "$health_disk_used" || printf '%s' "$disk_used_kib")
+    disk_available_kib=$(bytes_to_kib "$health_disk_available" || printf '%s' "$disk_available_kib")
+    disk_reserved_kib=$(bytes_to_kib "$health_disk_reserved" || printf '%s' "$disk_reserved_kib")
+    [ -z "$health_disk_percent" ] || disk_used_percent=$health_disk_percent
+    frame_data_kib=$(bytes_to_kib "$health_frame_data" || printf '%s' "$frame_data_kib")
+    media_data_kib=$(bytes_to_kib "$health_media_data" || printf '%s' "$media_data_kib")
   else
     health_ok=false
     manifest_version=unknown
@@ -107,7 +137,7 @@ collect_sample() {
   viewer_release=$(release_from_link /opt/naiskos/browser)
   agent_release=$(release_from_link /opt/naiskos/agent)
 
-  line="timestamp=$timestamp uptime_s=$uptime_seconds temp_c=$temperature throttled=$throttled load=$load_average mem_total_kib=$mem_total mem_used_kib=$mem_used mem_available_kib=$mem_available swap_total_kib=$swap_total swap_used_kib=$swap_used disk_total_kib=$disk_total_kib disk_used_kib=$disk_used_kib disk_available_kib=$disk_available_kib disk_used_percent=$disk_used_percent media_kib=$media_kib agent_state=$agent_state agent_mode=$agent_mode agent_pid=${agent_pid:-0} agent_rss_kib=$agent_rss_kib agent_cpu_percent=$agent_cpu_percent agent_elapsed_s=$agent_elapsed_seconds health_ok=$health_ok manifest_version=$manifest_version chromium_processes=$chromium_processes chromium_rss_kib=$chromium_rss_kib chromium_cpu_percent=$chromium_cpu_percent kiosk_launchers=$kiosk_launchers drm_connected=$drm_connected audio_cards=$audio_cards ntp_synchronized=$ntp_synchronized default_route=$default_route viewer_release=$viewer_release agent_release=$agent_release"
+  line="timestamp=$timestamp uptime_s=$uptime_seconds temp_c=$temperature throttled=$throttled load=$load_average mem_total_kib=$mem_total mem_used_kib=$mem_used mem_available_kib=$mem_available swap_total_kib=$swap_total swap_used_kib=$swap_used disk_total_kib=$disk_total_kib disk_used_kib=$disk_used_kib disk_available_kib=$disk_available_kib disk_reserved_kib=$disk_reserved_kib disk_used_percent=$disk_used_percent frame_data_kib=$frame_data_kib media_data_kib=$media_data_kib agent_state=$agent_state agent_mode=$agent_mode agent_pid=${agent_pid:-0} agent_rss_kib=$agent_rss_kib agent_cpu_percent=$agent_cpu_percent agent_elapsed_s=$agent_elapsed_seconds health_ok=$health_ok manifest_version=$manifest_version chromium_processes=$chromium_processes chromium_rss_kib=$chromium_rss_kib chromium_cpu_percent=$chromium_cpu_percent kiosk_launchers=$kiosk_launchers drm_connected=$drm_connected audio_cards=$audio_cards ntp_synchronized=$ntp_synchronized default_route=$default_route viewer_release=$viewer_release agent_release=$agent_release"
 
   logger --priority daemon.info --tag "$METRICS_TAG" -- "$line"
   printf '%s\n' "$line"
@@ -157,6 +187,7 @@ write_system_summary() {
     free -k
     printf '\n[storage]\n'
     df -h / /var/lib/naiskos
+    du -sh /var/lib/naiskos 2>/dev/null || true
     du -sh /var/lib/naiskos/media 2>/dev/null || true
     printf '\n[time]\n'
     timedatectl status 2>/dev/null || true

@@ -6,6 +6,7 @@ After=naiskos-agent.service
 [Service]
 Type=oneshot
 ExecStart=/opt/naiskos/bin/naiskos-diagnostics sample
+StandardOutput=null
 User=root
 Group=root
 Nice=10
