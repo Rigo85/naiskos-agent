@@ -61,6 +61,10 @@ describe("validateRemoteManifest", () => {
             posterSha256: "b".repeat(64),
             sizeBytes: "9697692",
             posterSizeBytes: "2048",
+            thumbnailDownloadUrl: "https://naiskos.test/thumbnail.webp",
+            thumbnailExtension: ".webp",
+            thumbnailSha256: "c".repeat(64),
+            thumbnailSizeBytes: "1024",
           },
         ],
       },
@@ -71,8 +75,24 @@ describe("validateRemoteManifest", () => {
       durationSeconds: 66.026,
       sizeBytes: 9_697_692,
       posterSizeBytes: 2_048,
+      thumbnailSizeBytes: 1_024,
       rotationDegrees: 0,
     });
+  });
+
+  it("mantiene compatible un manifiesto anterior sin miniaturas", () => {
+    const result = validateRemoteManifest(
+      {
+        schemaVersion: 1,
+        frameId: "este",
+        version: 1,
+        settingsRevision: 0,
+        settings: DEFAULT_SETTINGS,
+        media: [],
+      },
+      "este",
+    );
+    expect(result.media).toEqual([]);
   });
 });
 

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -29,6 +30,82 @@ afterEach(async () => {
 });
 
 describe("sincronización del agente", () => {
+  it("activa el medio aunque una miniatura opcional no pueda descargarse", async () => {
+    const dataRoot = await mkdtemp(path.join(os.tmpdir(), "naiskos-thumbnail-fallback-"));
+    temporaryDirectories.push(dataRoot);
+    const frameId = "11111111-1111-4111-8111-111111111111";
+    const display = Buffer.from("display-compatible");
+    const config = {
+      host: "127.0.0.1",
+      port: 8080,
+      dataRoot,
+      webRoot: dataRoot,
+      centralUrl: "https://naiskos.test",
+      frameId,
+      token: "token",
+      telegramBotUsername: "naiskosbot",
+      deviceBootstrapToken: null,
+      deviceName: null,
+      frameWidth: 1280,
+      frameHeight: 800,
+      syncIntervalMs: 5_000,
+      weatherSyncIntervalMs: 60_000,
+      diskBlockPercent: 90,
+    } satisfies AgentConfig;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.endsWith("display.webp")) return new Response(display);
+        if (url.endsWith("thumbnail.webp")) return new Response(null, { status: 503 });
+        throw new Error(`URL inesperada: ${url}`);
+      }),
+    );
+    const engine = new SyncEngine(config, emptyManifest(frameId));
+    const remote = {
+      ...emptyManifest(frameId),
+      version: 2,
+      publishedAt: new Date().toISOString(),
+      media: [
+        {
+          id: "photo-1",
+          kind: "photo" as const,
+          downloadUrl: "https://naiskos.test/display.webp",
+          posterDownloadUrl: null,
+          thumbnailDownloadUrl: "https://naiskos.test/thumbnail.webp",
+          extension: ".webp",
+          posterExtension: null,
+          thumbnailExtension: ".webp",
+          caption: null,
+          senderName: null,
+          receivedAt: new Date().toISOString(),
+          fitMode: "inherit" as const,
+          rotationDegrees: 0 as const,
+          durationSeconds: null,
+          sha256: createHash("sha256").update(display).digest("hex"),
+          posterSha256: null,
+          thumbnailSha256: "b".repeat(64),
+          sizeBytes: display.length,
+          posterSizeBytes: null,
+          thumbnailSizeBytes: 123,
+        },
+      ],
+    };
+    const materialize = (
+      engine as unknown as {
+        materialize(value: typeof remote, token: string): Promise<ReturnType<SyncEngine["currentManifest"]>>;
+      }
+    ).materialize.bind(engine);
+
+    const local = await materialize(remote, "token");
+
+    expect(local.media[0]).toMatchObject({
+      url: expect.stringMatching(/^\/media\/[a-f0-9]{64}\.webp$/),
+      thumbnailUrl: null,
+      thumbnailSizeBytes: null,
+    });
+  });
+
   it("expone y reporta un rechazo del outbox sin perder el manifiesto", async () => {
     const dataRoot = await mkdtemp(path.join(os.tmpdir(), "naiskos-sync-"));
     temporaryDirectories.push(dataRoot);

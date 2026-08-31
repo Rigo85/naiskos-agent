@@ -245,10 +245,42 @@ export function validateRemoteManifest(
     ) {
       throw new Error("Tamaño de póster inválido");
     }
+    const thumbnailValues = [
+      media.thumbnailDownloadUrl,
+      media.thumbnailExtension,
+      media.thumbnailSha256,
+      media.thumbnailSizeBytes,
+    ];
+    const hasThumbnail = thumbnailValues.some(
+      (value) => value !== null && value !== undefined,
+    );
+    let thumbnailSizeBytes: number | null = null;
+    if (hasThumbnail) {
+      if (
+        typeof media.thumbnailDownloadUrl !== "string" ||
+        !media.thumbnailDownloadUrl ||
+        !/^\.[a-z0-9]{2,5}$/i.test(String(media.thumbnailExtension)) ||
+        !/^[a-f0-9]{64}$/i.test(String(media.thumbnailSha256))
+      ) {
+        throw new Error("Miniatura incompleta o inválida");
+      }
+      thumbnailSizeBytes = Number(media.thumbnailSizeBytes);
+      if (!Number.isSafeInteger(thumbnailSizeBytes) || thumbnailSizeBytes < 0) {
+        throw new Error("Tamaño de miniatura inválido");
+      }
+    }
     media.rotationDegrees = Number(media.rotationDegrees ?? 0);
     media.sizeBytes = sizeBytes;
     media.durationSeconds = durationSeconds;
     media.posterSizeBytes = posterSizeBytes;
+    media.thumbnailDownloadUrl = hasThumbnail
+      ? String(media.thumbnailDownloadUrl)
+      : null;
+    media.thumbnailExtension = hasThumbnail
+      ? String(media.thumbnailExtension)
+      : null;
+    media.thumbnailSha256 = hasThumbnail ? String(media.thumbnailSha256) : null;
+    media.thumbnailSizeBytes = thumbnailSizeBytes;
   }
   return {
     ...(input as unknown as RemoteManifest),

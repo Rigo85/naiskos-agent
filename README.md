@@ -13,6 +13,8 @@ central sin interrumpir la presentación.
   `0600`.
 - Descargar cada versión en segundo plano, verificar tamaños y SHA-256 y
   activarla de forma atómica sólo cuando esté completa.
+- Descargar miniaturas opcionales para la galería; si una falla, conservar la
+  variante de presentación o el póster como fallback sin interrumpir el visor.
 - Conservar preferencias locales, eventos pendientes y el último manifiesto
   funcional después de reinicios o pérdidas de conexión.
 - Exponer al visor operaciones de encuadre, rotación, eliminación, salida y

@@ -403,11 +403,38 @@ export class SyncEngine {
         );
         posterUrl = `/media/${posterFilename}`;
       }
+      let thumbnailUrl: string | null = null;
+      if (
+        item.thumbnailDownloadUrl &&
+        item.thumbnailSha256 &&
+        item.thumbnailExtension
+      ) {
+        const thumbnailFilename = `${item.thumbnailSha256}${item.thumbnailExtension.toLowerCase()}`;
+        try {
+          await this.downloadIfMissing(
+            item.thumbnailDownloadUrl,
+            thumbnailFilename,
+            item.thumbnailSha256,
+            token,
+          );
+          thumbnailUrl = `/media/${thumbnailFilename}`;
+        } catch (error) {
+          console.warn(
+            JSON.stringify({
+              event: "media.thumbnail.download_failed",
+              timestamp: new Date().toISOString(),
+              mediaId: item.id,
+              error: error instanceof Error ? error.message : String(error),
+            }),
+          );
+        }
+      }
       media.push({
         id: item.id,
         kind: item.kind,
         url: `/media/${filename}`,
         posterUrl,
+        thumbnailUrl,
         caption: item.caption,
         senderName: item.senderName,
         receivedAt: item.receivedAt,
@@ -417,6 +444,7 @@ export class SyncEngine {
         sha256: item.sha256,
         sizeBytes: item.sizeBytes,
         posterSizeBytes: item.posterSizeBytes,
+        thumbnailSizeBytes: thumbnailUrl ? (item.thumbnailSizeBytes ?? null) : null,
       });
     }
     return {
@@ -495,6 +523,7 @@ export class SyncEngine {
     for (const item of manifest.media) {
       referenced.add(path.basename(item.url));
       if (item.posterUrl) referenced.add(path.basename(item.posterUrl));
+      if (item.thumbnailUrl) referenced.add(path.basename(item.thumbnailUrl));
     }
     const files = await readdir(this.mediaRoot);
     const now = Date.now();

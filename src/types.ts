@@ -41,8 +41,10 @@ export interface RemoteMediaItem {
   kind: "photo" | "video";
   downloadUrl: string;
   posterDownloadUrl: string | null;
+  thumbnailDownloadUrl?: string | null;
   extension: string;
   posterExtension: string | null;
+  thumbnailExtension?: string | null;
   caption: string | null;
   senderName: string | null;
   receivedAt: string;
@@ -51,8 +53,10 @@ export interface RemoteMediaItem {
   durationSeconds: number | null;
   sha256: string;
   posterSha256: string | null;
+  thumbnailSha256?: string | null;
   sizeBytes: number;
   posterSizeBytes: number | null;
+  thumbnailSizeBytes?: number | null;
 }
 
 export interface LocalMediaItem {
@@ -60,6 +64,7 @@ export interface LocalMediaItem {
   kind: "photo" | "video";
   url: string;
   posterUrl: string | null;
+  thumbnailUrl?: string | null;
   caption: string | null;
   senderName: string | null;
   receivedAt: string;
@@ -69,6 +74,7 @@ export interface LocalMediaItem {
   sha256: string;
   sizeBytes: number;
   posterSizeBytes: number | null;
+  thumbnailSizeBytes?: number | null;
 }
 
 export interface RemoteManifest {
