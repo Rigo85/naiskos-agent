@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -32,7 +32,7 @@ describe("sincronización del agente", () => {
   it("expone y reporta un rechazo del outbox sin perder el manifiesto", async () => {
     const dataRoot = await mkdtemp(path.join(os.tmpdir(), "naiskos-sync-"));
     temporaryDirectories.push(dataRoot);
-    const frameId = "a210a8b6-1a17-4759-af25-2cf1fca0c056";
+    const frameId = "11111111-1111-4111-8111-111111111111";
     const config: AgentConfig = {
       host: "127.0.0.1",
       port: 8080,
@@ -98,7 +98,7 @@ describe("sincronización del agente", () => {
   it("una actualización de contenido no pisa ninguna opción productiva", async () => {
     const dataRoot = await mkdtemp(path.join(os.tmpdir(), "naiskos-settings-"));
     temporaryDirectories.push(dataRoot);
-    const frameId = "a210a8b6-1a17-4759-af25-2cf1fca0c056";
+    const frameId = "11111111-1111-4111-8111-111111111111";
     const productionSettings = {
       ...emptyManifest().settings,
       photoDurationSeconds: 47,
@@ -138,6 +138,8 @@ describe("sincronización del agente", () => {
       vi.fn(async (input: string | URL | Request) => {
         const url = String(input);
         if (url.endsWith("/weather")) return Response.json(pendingWeather);
+        if (url.endsWith("/notifications"))
+          return Response.json({ notifications: [] });
         if (url.endsWith("/manifest")) {
           return Response.json({
             schemaVersion: 1,
@@ -173,7 +175,7 @@ describe("sincronización del agente", () => {
   it("adopta todas las opciones cuando existe una revisión explícitamente nueva", async () => {
     const dataRoot = await mkdtemp(path.join(os.tmpdir(), "naiskos-settings-revision-"));
     temporaryDirectories.push(dataRoot);
-    const frameId = "a210a8b6-1a17-4759-af25-2cf1fca0c056";
+    const frameId = "11111111-1111-4111-8111-111111111111";
     const remoteSettings = {
       ...emptyManifest().settings,
       photoDurationSeconds: 90,
@@ -207,6 +209,8 @@ describe("sincronización del agente", () => {
       vi.fn(async (input: string | URL | Request) => {
         const url = String(input);
         if (url.endsWith("/weather")) return Response.json(pendingWeather);
+        if (url.endsWith("/notifications"))
+          return Response.json({ notifications: [] });
         if (url.endsWith("/manifest"))
           return Response.json({
             schemaVersion: 1,
@@ -226,5 +230,58 @@ describe("sincronización del agente", () => {
     await engine.sync();
     expect(engine.currentManifest().settingsRevision).toBe(1);
     expect(engine.currentManifest().settings).toEqual(remoteSettings);
+  });
+
+  it("sincroniza notificaciones centrales y las conserva localmente", async () => {
+    const dataRoot = await mkdtemp(path.join(os.tmpdir(), "naiskos-notifications-"));
+    temporaryDirectories.push(dataRoot);
+    const frameId = "11111111-1111-4111-8111-111111111111";
+    const config = {
+      host: "127.0.0.1",
+      port: 8080,
+      dataRoot,
+      webRoot: dataRoot,
+      centralUrl: "https://naiskos.test",
+      frameId,
+      token: "token",
+      telegramBotUsername: "naiskosbot",
+      deviceBootstrapToken: null,
+      deviceName: null,
+      frameWidth: 1280,
+      frameHeight: 800,
+      syncIntervalMs: 5_000,
+      weatherSyncIntervalMs: 60_000,
+      diskBlockPercent: 90,
+    } satisfies AgentConfig;
+    const notification = {
+      id: "dc3c227d-594e-4a88-ad4c-3ef330394127",
+      kind: "media.processing.failed",
+      severity: "error",
+      title: "Contenido no procesado",
+      message: "Vuelve a enviarlo.",
+      createdAt: "2026-08-31T14:00:00.000Z",
+      updatedAt: "2026-08-31T14:00:00.000Z",
+      readAt: null,
+      resolvedAt: null,
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.endsWith("/notifications"))
+          return Response.json({ notifications: [notification] });
+        if (url.endsWith("/weather")) return Response.json(pendingWeather);
+        if (url.endsWith("/manifest")) return new Response(null, { status: 304 });
+        if (url.endsWith("/telemetry")) return new Response(null, { status: 204 });
+        throw new Error(`URL inesperada: ${url}`);
+      }),
+    );
+
+    const engine = new SyncEngine(config, emptyManifest(frameId));
+    await engine.sync();
+    expect(engine.currentNotifications()).toEqual([notification]);
+    expect(
+      JSON.parse(await readFile(path.join(dataRoot, "notifications.json"), "utf8")),
+    ).toEqual([notification]);
   });
 });

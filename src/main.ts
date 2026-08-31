@@ -8,7 +8,12 @@ import {
   ProvisioningManager,
 } from "./provisioning.js";
 import { SyncEngine } from "./sync-engine.js";
-import { EMPTY_WEATHER, LocalManifest, WeatherSnapshot } from "./types.js";
+import {
+  EMPTY_WEATHER,
+  FrameNotification,
+  LocalManifest,
+  WeatherSnapshot,
+} from "./types.js";
 import { emptyManifest } from "./validation.js";
 import { errorForLog } from "./logging.js";
 
@@ -23,8 +28,12 @@ const weatherFile = path.join(config.dataRoot, "weather.json");
 const weather =
   (await readJson<WeatherSnapshot>(weatherFile)) ?? { ...EMPTY_WEATHER };
 await writeJsonAtomic(weatherFile, weather);
+const notificationsFile = path.join(config.dataRoot, "notifications.json");
+const notifications =
+  (await readJson<FrameNotification[]>(notificationsFile)) ?? [];
+await writeJsonAtomic(notificationsFile, notifications);
 
-const engine = new SyncEngine(config, manifest, weather);
+const engine = new SyncEngine(config, manifest, weather, notifications);
 const provisioning = new ProvisioningManager(config, (frameId) =>
   engine.configure(frameId),
 );

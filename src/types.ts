@@ -91,6 +91,18 @@ export interface LocalManifest {
   media: LocalMediaItem[];
 }
 
+export interface FrameNotification {
+  id: string;
+  kind: string;
+  severity: "info" | "warning" | "error";
+  title: string;
+  message: string;
+  createdAt: string;
+  updatedAt: string;
+  readAt: string | null;
+  resolvedAt: string | null;
+}
+
 export interface AgentStatus {
   state:
     | "unconfigured"

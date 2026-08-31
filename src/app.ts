@@ -142,6 +142,34 @@ export async function buildApp(
     return engine.currentManifest();
   });
   app.get("/api/v1/weather", async () => engine.currentWeather());
+  app.get("/api/v1/notifications", async () => ({
+    notifications: engine.currentNotifications(),
+  }));
+  app.post<{ Params: { id: string } }>(
+    "/api/v1/notifications/:id/read",
+    async (request, reply) => {
+      if (!(await engine.markNotification(request.params.id, "read"))) {
+        return reply.code(404).send({ error: "Notificación no encontrada" });
+      }
+      void engine.sync().catch(() => undefined);
+      return reply.code(204).send();
+    },
+  );
+  app.delete<{ Params: { id: string } }>(
+    "/api/v1/notifications/:id",
+    async (request, reply) => {
+      if (!(await engine.markNotification(request.params.id, "dismissed"))) {
+        return reply.code(404).send({ error: "Notificación no encontrada" });
+      }
+      void engine.sync().catch(() => undefined);
+      return reply.code(204).send();
+    },
+  );
+  app.post("/api/v1/notifications/read-all", async (_request, reply) => {
+    const updated = await engine.markAllNotificationsRead();
+    void engine.sync().catch(() => undefined);
+    return reply.send({ updated });
+  });
 
   app.patch("/api/v1/settings", async (request, reply) => {
     try {

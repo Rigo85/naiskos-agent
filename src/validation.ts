@@ -4,6 +4,7 @@ import {
   LocalManifest,
   RemoteManifest,
   WeatherSnapshot,
+  FrameNotification,
 } from "./types.js";
 
 function object(value: unknown, name: string): Record<string, unknown> {
@@ -138,6 +139,48 @@ export function validateWeatherSnapshot(value: unknown): WeatherSnapshot {
     staleAfter,
     lastError,
   };
+}
+
+export function validateNotifications(value: unknown): FrameNotification[] {
+  const input = object(value, "notifications");
+  if (!Array.isArray(input.notifications)) {
+    throw new Error("notifications no es una lista válida");
+  }
+  return input.notifications.slice(0, 100).map((value, index) => {
+    const item = object(value, `notifications[${index}]`);
+    const severity = String(item.severity);
+    if (
+      typeof item.id !== "string" ||
+      !/^[0-9a-f-]{36}$/i.test(item.id) ||
+      typeof item.kind !== "string" ||
+      !["info", "warning", "error"].includes(severity) ||
+      typeof item.title !== "string" ||
+      item.title.length < 1 ||
+      item.title.length > 160 ||
+      typeof item.message !== "string" ||
+      item.message.length < 1 ||
+      item.message.length > 1_000
+    ) {
+      throw new Error(`Notificación ${index} inválida`);
+    }
+    return {
+      id: item.id,
+      kind: item.kind.slice(0, 200),
+      severity: severity as FrameNotification["severity"],
+      title: item.title,
+      message: item.message,
+      createdAt: requiredDate(item.createdAt, `notifications[${index}].createdAt`),
+      updatedAt: requiredDate(item.updatedAt, `notifications[${index}].updatedAt`),
+      readAt: nullableDate(item.readAt, `notifications[${index}].readAt`),
+      resolvedAt: nullableDate(item.resolvedAt, `notifications[${index}].resolvedAt`),
+    };
+  });
+}
+
+function requiredDate(value: unknown, name: string): string {
+  const result = nullableDate(value, name);
+  if (!result) throw new Error(`${name} es obligatorio`);
+  return result;
 }
 
 function nullableDate(value: unknown, name: string): string | null {

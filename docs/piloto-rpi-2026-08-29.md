@@ -43,7 +43,8 @@ La solicitud real detectó:
 - Raspberry Pi 4 Model B Rev 1.5;
 - resolución 1280 × 800;
 - nombre provisional `Naiskos 276B46`;
-- marco asignado `a210a8b6-1a17-4759-af25-2cf1fca0c056`.
+- marco asignado correctamente; el identificador real se conserva sólo en la
+  documentación privada y en la configuración del equipo.
 
 No se aprobó el dispositivo por Telegram. El agente se autenticó con la
 credencial de instalación, la central creó el marco vacío y la credencial quedó

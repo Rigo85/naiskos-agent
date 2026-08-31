@@ -81,6 +81,71 @@ describe("agente HTTP", () => {
     await app.close();
   });
 
+  it("expone, marca y oculta notificaciones persistentes", async () => {
+    const { app, engine } = await fixture();
+    const firstId = "dc3c227d-594e-4a88-ad4c-3ef330394127";
+    const secondId = "ec3c227d-594e-4a88-ad4c-3ef330394128";
+    (engine as unknown as { notifications: unknown[] }).notifications = [
+      {
+        id: firstId,
+        kind: "storage.capacity.blocked",
+        severity: "error",
+        title: "Almacenamiento casi lleno",
+        message: "Libera espacio.",
+        createdAt: "2026-08-31T14:00:00.000Z",
+        updatedAt: "2026-08-31T14:00:00.000Z",
+        readAt: null,
+        resolvedAt: null,
+      },
+      {
+        id: secondId,
+        kind: "media.processing.failed",
+        severity: "error",
+        title: "Contenido no procesado",
+        message: "Vuelve a enviarlo.",
+        createdAt: "2026-08-31T14:01:00.000Z",
+        updatedAt: "2026-08-31T14:01:00.000Z",
+        readAt: null,
+        resolvedAt: null,
+      },
+    ];
+
+    expect(
+      (await app.inject({ method: "GET", url: "/api/v1/notifications" })).json()
+        .notifications,
+    ).toHaveLength(2);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/v1/notifications/${firstId}/read`,
+        })
+      ).statusCode,
+    ).toBe(204);
+    expect(
+      (
+        await app.inject({
+          method: "DELETE",
+          url: `/api/v1/notifications/${secondId}`,
+        })
+      ).statusCode,
+    ).toBe(204);
+
+    const visible = (
+      await app.inject({ method: "GET", url: "/api/v1/notifications" })
+    ).json().notifications;
+    expect(visible).toHaveLength(1);
+    expect(visible[0].readAt).toBeTruthy();
+    const outbox = JSON.parse(
+      await readFile(path.join((engine as unknown as { manifestFile: string }).manifestFile, "..", "outbox.json"), "utf8"),
+    ) as Array<Record<string, unknown>>;
+    expect(outbox.map((event) => event.type)).toEqual([
+      "notification.read",
+      "notification.dismissed",
+    ]);
+    await app.close();
+  });
+
   it("persiste los ajustes locales y valida sus límites", async () => {
     const { app } = await fixture();
     const response = await app.inject({

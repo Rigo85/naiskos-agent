@@ -7,8 +7,8 @@ central sin interrumpir la presentación.
 
 ## Responsabilidades
 
-- Servir el visor, el manifiesto, el clima y los archivos multimedia desde un
-  mismo origen local.
+- Servir el visor, el manifiesto, el clima, las notificaciones y los archivos
+  multimedia desde un mismo origen local.
 - Registrar automáticamente un marco nuevo y guardar sus credenciales con modo
   `0600`.
 - Descargar cada versión en segundo plano, verificar tamaños y SHA-256 y
@@ -90,19 +90,24 @@ Dentro de `NAISKOS_DATA_ROOT` se almacenan, entre otros:
 - `device-credentials.json`: identidad del marco, modo `0600`;
 - `manifest.json`: versión multimedia activa;
 - `weather.json`: última respuesta meteorológica utilizable;
+- `notifications.json`: copia atómica de los avisos visibles del marco;
 - `outbox.json`: eventos que esperan confirmación central;
 - `media/`: archivos direccionados por su SHA-256.
 
 Las descargas se preparan en rutas temporales y después se renombran. Una
 interrupción nunca debe sustituir el manifiesto válido por una versión parcial.
+Las acciones de notificación se escriben primero en local y entran al outbox;
+si la central falla, no se pierden ni se sobrescriben con el estado remoto
+anterior.
 
 ## API local
 
 La interfaz principal está bajo `/api/v1`:
 
-- `GET /health`, `/manifest`, `/weather` y `/provisioning`;
+- `GET /health`, `/manifest`, `/weather`, `/notifications` y `/provisioning`;
 - QR de alta o vinculación en `/provisioning/qr.png` y `/pairing/qr.png`;
 - ajustes en `/settings` y administración de cada medio en `/media/:id`;
+- lectura y ocultación persistentes en `/notifications/:id`;
 - sincronización manual en `/sync`;
 - salida o apagado en `/system/actions`.
 

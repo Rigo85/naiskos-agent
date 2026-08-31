@@ -13,12 +13,14 @@ import {
   LocalMediaItem,
   RemoteManifest,
   WeatherSnapshot,
+  FrameNotification,
   EMPTY_WEATHER,
 } from "./types.js";
 import {
   normalizeSettings,
   validateRemoteManifest,
   validateWeatherSnapshot,
+  validateNotifications,
 } from "./validation.js";
 import { scanWifiAccessPoints } from "./wifi-scan.js";
 import {
@@ -30,6 +32,7 @@ export class SyncEngine {
   readonly manifestFile: string;
   readonly mediaRoot: string;
   readonly weatherFile: string;
+  readonly notificationsFile: string;
   status: AgentStatus;
   private running = false;
   private outboxChain: Promise<unknown> = Promise.resolve();
@@ -41,6 +44,7 @@ export class SyncEngine {
     private readonly config: AgentConfig,
     private manifest: LocalManifest,
     private weather: WeatherSnapshot = EMPTY_WEATHER,
+    private notifications: FrameNotification[] = [],
   ) {
     this.manifest = {
       ...manifest,
@@ -58,6 +62,7 @@ export class SyncEngine {
     this.manifestFile = path.join(config.dataRoot, "manifest.json");
     this.mediaRoot = path.join(config.dataRoot, "media");
     this.weatherFile = path.join(config.dataRoot, "weather.json");
+    this.notificationsFile = path.join(config.dataRoot, "notifications.json");
     this.status = {
       state:
         config.frameId && config.centralUrl && config.token
@@ -90,6 +95,40 @@ export class SyncEngine {
       return { ...this.weather, status: "stale" };
     }
     return this.weather;
+  }
+
+  currentNotifications(): FrameNotification[] {
+    return this.notifications;
+  }
+
+  async markNotification(
+    notificationId: string,
+    action: "read" | "dismissed",
+  ): Promise<boolean> {
+    const found = this.notifications.some((item) => item.id === notificationId);
+    if (!found) return false;
+    const now = new Date().toISOString();
+    this.notifications =
+      action === "dismissed"
+        ? this.notifications.filter((item) => item.id !== notificationId)
+        : this.notifications.map((item) =>
+            item.id === notificationId && !item.readAt
+              ? { ...item, readAt: now, updatedAt: now }
+              : item,
+          );
+    await writeJsonAtomic(this.notificationsFile, this.notifications);
+    await this.enqueueEvent({
+      type: `notification.${action}`,
+      at: now,
+      notificationId,
+    });
+    return true;
+  }
+
+  async markAllNotificationsRead(): Promise<number> {
+    const unread = this.notifications.filter((item) => !item.readAt);
+    for (const item of unread) await this.markNotification(item.id, "read");
+    return unread.length;
   }
 
   async configure(frameId: string): Promise<void> {
@@ -153,11 +192,19 @@ export class SyncEngine {
     this.running = true;
     let outboxError: unknown = null;
     let weatherError: unknown = null;
+    let notificationError: unknown = null;
     try {
       try {
         await this.flushOutbox();
       } catch (error) {
         outboxError = error;
+      }
+      if (!outboxError) {
+        try {
+          await this.syncNotifications();
+        } catch (error) {
+          notificationError = error;
+        }
       }
       await this.refreshStorageUsage();
       if (this.status.diskUsedPercent >= this.config.diskBlockPercent) {
@@ -209,6 +256,8 @@ export class SyncEngine {
       this.running = false;
       if (outboxError) this.recordAuxiliaryError("Outbox", outboxError);
       if (weatherError) this.recordAuxiliaryError("Clima", weatherError);
+      if (notificationError)
+        this.recordAuxiliaryError("Notificaciones", notificationError);
       try {
         await this.reportTelemetry();
       } catch (error) {
@@ -245,6 +294,23 @@ export class SyncEngine {
     if (JSON.stringify(incoming) === JSON.stringify(this.weather)) return;
     await writeJsonAtomic(this.weatherFile, incoming);
     this.weather = incoming;
+  }
+
+  private async syncNotifications(): Promise<void> {
+    const { frameId, centralUrl, token } = this.config;
+    if (!frameId || !centralUrl || !token) return;
+    const response = await fetch(
+      `${centralUrl}/api/v1/frames/${encodeURIComponent(frameId)}/notifications`,
+      {
+        headers: { authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(20_000),
+      },
+    );
+    if (!response.ok) throw new Error(`Central respondió HTTP ${response.status}`);
+    const incoming = validateNotifications(await response.json());
+    if (JSON.stringify(incoming) === JSON.stringify(this.notifications)) return;
+    await writeJsonAtomic(this.notificationsFile, incoming);
+    this.notifications = incoming;
   }
 
   private async flushOutbox(): Promise<void> {
