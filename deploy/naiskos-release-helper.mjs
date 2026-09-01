@@ -48,7 +48,12 @@ if (command === "verify-request") {
   const manifest = JSON.parse(await readFile(manifestFile, "utf8"));
   const root = await realpath(releaseRoot);
   for (const file of manifest.files ?? []) {
-    if (!/^(naiskos-agent|browser|migrations)\/[A-Za-z0-9@._/-]+$/.test(file.path) || file.path.includes("..")) {
+    if (
+      typeof file.path !== "string" ||
+      !/^(naiskos-agent|browser|migrations)\//.test(file.path) ||
+      file.path.includes("\0") ||
+      file.path.split("/").includes("..")
+    ) {
       fail(`Ruta no permitida: ${file.path}`);
     }
     const resolved = await realpath(path.join(root, file.path));
