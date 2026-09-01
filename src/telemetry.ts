@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readFile, readlink, readdir } from "node:fs/promises";
+import { readFile, realpath, readdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -224,8 +224,7 @@ async function readSoftware(): Promise<FullTelemetry["software"]> {
 
 async function releaseFromLink(link: string): Promise<string> {
   try {
-    const target = await readlink(link);
-    const resolved = path.resolve(path.dirname(link), target);
+    const resolved = await realpath(link);
     const parts = resolved.split(path.sep);
     const releases = parts.lastIndexOf("releases");
     return (releases >= 0 ? parts[releases + 1] : path.basename(resolved)) || "unknown";
