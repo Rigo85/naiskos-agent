@@ -209,6 +209,51 @@ describe("agente HTTP", () => {
     await app.close();
   });
 
+  it("valida y conserva los resultados del horario de pantalla", async () => {
+    const { app, engine } = await fixture();
+    const forbidden = await app.inject({
+      method: "POST",
+      url: "/api/v1/system/display-events",
+      payload: { type: "display.wake.failed", attempts: 6 },
+    });
+    expect(forbidden.statusCode).toBe(403);
+
+    const invalid = await app.inject({
+      method: "POST",
+      url: "/api/v1/system/display-events",
+      headers: { "x-naiskos-request": "scheduler" },
+      payload: { type: "display.wake.unknown", attempts: 6 },
+    });
+    expect(invalid.statusCode).toBe(400);
+
+    const accepted = await app.inject({
+      method: "POST",
+      url: "/api/v1/system/display-events",
+      headers: { "x-naiskos-request": "scheduler" },
+      payload: { type: "display.wake.succeeded", attempts: 2 },
+    });
+    expect(accepted.statusCode).toBe(202);
+    expect(accepted.json()).toMatchObject({ accepted: true });
+
+    const outbox = JSON.parse(
+      await readFile(
+        path.join(
+          (engine as unknown as { manifestFile: string }).manifestFile,
+          "..",
+          "outbox.json",
+        ),
+        "utf8",
+      ),
+    ) as Array<Record<string, unknown>>;
+    expect(outbox).toHaveLength(1);
+    expect(outbox[0]).toMatchObject({
+      type: "display.wake.succeeded",
+      attempts: 2,
+      actor: null,
+    });
+    await app.close();
+  });
+
   it("encola rotación y eliminación sin modificar anticipadamente el manifiesto", async () => {
     const { app, engine } = await fixture();
     const mediaId = "b210a8b6-1a17-4759-af25-2cf1fca0c057";

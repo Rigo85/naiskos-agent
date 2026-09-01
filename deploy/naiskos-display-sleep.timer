@@ -1,0 +1,13 @@
+[Unit]
+Description=Schedule Naiskos display repose at {{ naiskos_profile.schedule.visible_until }}
+
+[Timer]
+OnCalendar=*-*-* {{ naiskos_profile.schedule.visible_until }}:00
+AccuracySec=15s
+RandomizedDelaySec=0
+Persistent=false
+Unit=naiskos-display-sleep.service
+
+[Install]
+WantedBy=timers.target
+

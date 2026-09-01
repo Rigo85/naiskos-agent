@@ -1,0 +1,100 @@
+#!/bin/sh
+
+set -eu
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ACTION=${1:-}
+CONNECTOR=${NAISKOS_DISPLAY_CONNECTOR:-HDMI-A-1}
+MODE=${NAISKOS_DISPLAY_MODE:-1280x800}
+RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+MAX_ATTEMPTS=${NAISKOS_DISPLAY_MAX_ATTEMPTS:-6}
+RETRY_SECONDS=${NAISKOS_DISPLAY_RETRY_SECONDS:-5}
+AGENT_URL=${NAISKOS_AGENT_URL:-http://127.0.0.1:8080}
+LOG_TAG=naiskos-display-power
+
+case "$ACTION" in
+  on|off) ;;
+  *) printf 'Uso: %s on|off\n' "$0" >&2; exit 2 ;;
+esac
+
+case "$MAX_ATTEMPTS:$RETRY_SECONDS" in
+  *[!0-9:]*|:*|*:) printf 'Parámetros de reintento inválidos.\n' >&2; exit 2 ;;
+esac
+[ "$MAX_ATTEMPTS" -ge 1 ] && [ "$MAX_ATTEMPTS" -le 10 ] || exit 2
+
+report_event() {
+  result=$1
+  attempts=$2
+  if [ "$ACTION" = on ]; then
+    event_phase=wake
+  else
+    event_phase=sleep
+  fi
+  event_type="display.$event_phase.$result"
+  payload=$(printf '{"type":"%s","attempts":%s}' "$event_type" "$attempts")
+  report_attempt=1
+  while [ "$report_attempt" -le 3 ]; do
+    if /usr/bin/curl --fail --silent --show-error --max-time 3 \
+      -H 'content-type: application/json' \
+      -H 'x-naiskos-request: scheduler' \
+      --data "$payload" "$AGENT_URL/api/v1/system/display-events" \
+      >/dev/null; then
+      return 0
+    fi
+    report_attempt=$((report_attempt + 1))
+    sleep 1
+  done
+  logger --priority daemon.warning --tag "$LOG_TAG" -- \
+    "action=$ACTION result=event_pending attempts=$attempts reason=agent_unreachable"
+  return 1
+}
+
+if [ -z "${WAYLAND_DISPLAY:-}" ]; then
+  for candidate in "$RUNTIME_DIR"/wayland-*; do
+    if [ -S "$candidate" ]; then
+      WAYLAND_DISPLAY=$(basename "$candidate")
+      break
+    fi
+  done
+fi
+if [ -z "${WAYLAND_DISPLAY:-}" ]; then
+  logger --priority daemon.err --tag "$LOG_TAG" -- \
+    "action=$ACTION result=failed attempts=0 reason=wayland_socket_missing"
+  report_event failed 1 || true
+  exit 1
+fi
+export XDG_RUNTIME_DIR="$RUNTIME_DIR" WAYLAND_DISPLAY
+
+display_state() {
+  /usr/bin/wlopm 2>/dev/null | awk -v connector="$CONNECTOR" \
+    '$1 == connector { print $2; exit }'
+}
+
+attempt=1
+while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
+  if [ "$ACTION" = off ]; then
+    /usr/bin/wlopm --off "$CONNECTOR" >/dev/null 2>&1 || true
+  else
+    /usr/bin/wlopm --on "$CONNECTOR" >/dev/null 2>&1 || true
+    if [ "$(display_state)" != on ]; then
+      /usr/bin/wlr-randr --output "$CONNECTOR" --on --mode "$MODE" \
+        >/dev/null 2>&1 || true
+    fi
+  fi
+
+  state=$(display_state || true)
+  if { [ "$ACTION" = on ] && [ "$state" = on ]; } || \
+     { [ "$ACTION" = off ] && [ "$state" = off ]; }; then
+    logger --priority daemon.notice --tag "$LOG_TAG" -- \
+      "action=$ACTION result=succeeded attempts=$attempt connector=$CONNECTOR state=$state wayland=$WAYLAND_DISPLAY"
+    report_event succeeded "$attempt" || true
+    exit 0
+  fi
+  [ "$attempt" -eq "$MAX_ATTEMPTS" ] || sleep "$RETRY_SECONDS"
+  attempt=$((attempt + 1))
+done
+
+logger --priority daemon.err --tag "$LOG_TAG" -- \
+  "action=$ACTION result=failed attempts=$MAX_ATTEMPTS connector=$CONNECTOR state=${state:-unknown} wayland=$WAYLAND_DISPLAY"
+report_event failed "$MAX_ATTEMPTS" || true
+exit 1

@@ -1,0 +1,18 @@
+[Unit]
+Description=Put the Naiskos display into scheduled repose
+After=graphical.target naiskos-agent.service
+
+[Service]
+Type=oneshot
+User={{ naiskos_kiosk_user }}
+Group={{ naiskos_kiosk_primary_group }}
+Environment=XDG_RUNTIME_DIR=/run/user/{{ naiskos_kiosk_uid }}
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{{ naiskos_kiosk_uid }}/bus
+Environment=NAISKOS_DISPLAY_CONNECTOR={{ naiskos_profile.display.connector }}
+Environment=NAISKOS_DISPLAY_MODE={{ naiskos_profile.display.width }}x{{ naiskos_profile.display.height }}
+ExecStart=/opt/naiskos/bin/naiskos-display-power off
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+

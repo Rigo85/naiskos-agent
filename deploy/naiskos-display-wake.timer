@@ -1,0 +1,13 @@
+[Unit]
+Description=Schedule Naiskos display wake at {{ naiskos_profile.schedule.display_wake_at }}
+
+[Timer]
+OnCalendar=*-*-* {{ naiskos_profile.schedule.display_wake_at }}:00
+AccuracySec=15s
+RandomizedDelaySec=0
+Persistent=true
+Unit=naiskos-display-wake.service
+
+[Install]
+WantedBy=timers.target
+

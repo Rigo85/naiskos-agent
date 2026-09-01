@@ -12,6 +12,18 @@ import { normalizeSettings } from "./validation.js";
 import { errorForLog } from "./logging.js";
 
 type SystemAction = "exit" | "poweroff";
+type DisplayScheduleEvent =
+  | "display.sleep.succeeded"
+  | "display.sleep.failed"
+  | "display.wake.succeeded"
+  | "display.wake.failed";
+
+const DISPLAY_SCHEDULE_EVENTS = new Set<DisplayScheduleEvent>([
+  "display.sleep.succeeded",
+  "display.sleep.failed",
+  "display.wake.succeeded",
+  "display.wake.failed",
+]);
 
 export async function buildApp(
   config: AgentConfig,
@@ -135,6 +147,35 @@ export async function buildApp(
       });
       systemControl = { sequence: systemControl.sequence + 1, action };
       return reply.code(202).send({ accepted: true, ...systemControl });
+    },
+  );
+  app.post<{ Body: { type?: string; attempts?: number } }>(
+    "/api/v1/system/display-events",
+    async (request, reply) => {
+      if (request.headers["x-naiskos-request"] !== "scheduler") {
+        return reply.code(403).send({ error: "Solicitud local inválida" });
+      }
+      const type = request.body?.type as DisplayScheduleEvent | undefined;
+      const attempts = Number(request.body?.attempts);
+      if (!type || !DISPLAY_SCHEDULE_EVENTS.has(type)) {
+        return reply.code(400).send({ error: "Evento de pantalla inválido" });
+      }
+      if (!Number.isSafeInteger(attempts) || attempts < 1 || attempts > 10) {
+        return reply.code(400).send({ error: "Cantidad de intentos inválida" });
+      }
+      const id = await engine.enqueueEvent({
+        type,
+        at: new Date().toISOString(),
+        attempts,
+        actor: null,
+      });
+      void engine.sync().catch((error) =>
+        request.log.warn(
+          { err: errorForLog(error), eventId: id },
+          "Evento de pantalla pendiente de sincronización",
+        ),
+      );
+      return reply.code(202).send({ accepted: true, id });
     },
   );
   app.get("/api/v1/manifest", async (_request, reply) => {
