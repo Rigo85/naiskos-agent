@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+simulation=$(apt-get -s -o Debug::NoLocking=1 dist-upgrade 2>&1) || {
+  /opt/naiskos/bin/naiskos-release-helper.mjs report-system 0 false "No se pudo consultar APT"
+  exit 1
+}
+count=$(printf '%s\n' "$simulation" | awk '/^Inst / { count++ } END { print count+0 }')
+if [ -e /var/run/reboot-required ]; then reboot=true; else reboot=false; fi
+/opt/naiskos/bin/naiskos-release-helper.mjs report-system "$count" "$reboot"

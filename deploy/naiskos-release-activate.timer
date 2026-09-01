@@ -1,0 +1,11 @@
+[Unit]
+Description=Revisa releases preparadas de Naiskos
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

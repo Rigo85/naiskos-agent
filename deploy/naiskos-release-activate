@@ -1,0 +1,118 @@
+#!/bin/sh
+set -eu
+
+request=/var/lib/naiskos/updates/activation-request.json
+observation=/var/lib/naiskos/updates/observation.json
+public_key=/etc/naiskos/release-signing-public.pem
+baseline=/etc/naiskos/baseline.json
+helper=/opt/naiskos/bin/naiskos-release-helper.mjs
+force=0
+[ "${1:-}" = "--force" ] && force=1
+
+exec 9>/run/naiskos-release-activate.lock
+/usr/bin/flock --nonblock 9 || exit 0
+
+report() {
+  "$helper" report "$1" "$2" "$3" "${4:-}" || true
+}
+
+restart_runtime() {
+  systemctl restart naiskos-agent.service
+  pkill -TERM -x chromium 2>/dev/null || true
+}
+
+if [ -s "$observation" ]; then
+  values=$(/opt/node24/bin/node -e '
+    const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
+    process.stdout.write([s.campaignId,s.releaseId,s.previous,s.activatedAt,s.observeMinutes,s.failures||0].join("|"));
+  ' "$observation")
+  IFS='|' read -r campaign release previous activated_at observe_minutes failures <<EOF
+$values
+EOF
+  if curl -fsS --max-time 5 http://127.0.0.1:8080/api/v1/health >/dev/null; then
+    activated_epoch=$(date -d "$activated_at" +%s)
+    now_epoch=$(date +%s)
+    if [ $((now_epoch - activated_epoch)) -ge $((observe_minutes * 60)) ]; then
+      report "$campaign" "$release" installed
+      rm -f -- "$observation"
+    fi
+  else
+    failures=$((failures + 1))
+    if [ "$failures" -ge 3 ] && [ -n "$previous" ] && [ -d "/opt/naiskos/releases/$previous" ]; then
+      ln -sfn "/opt/naiskos/releases/$previous" /opt/naiskos/current.rollback
+      mv -Tf /opt/naiskos/current.rollback /opt/naiskos/current
+      restart_runtime
+      report "$campaign" "$release" rolled_back "La salud local falló tres veces durante la observación"
+      rm -f -- "$observation"
+    else
+      /opt/node24/bin/node -e '
+        const fs=require("fs"),p=process.argv[1],s=JSON.parse(fs.readFileSync(p,"utf8"));
+        s.failures=Number(process.argv[2]); fs.writeFileSync(p+".tmp",JSON.stringify(s)+"\n",{mode:0o600}); fs.renameSync(p+".tmp",p);
+      ' "$observation" "$failures"
+    fi
+  fi
+  exit 0
+fi
+
+[ -s "$request" ] || exit 0
+values=$($helper verify-request "$request" "$public_key" "$baseline")
+IFS='|' read -r campaign release manifest archive window_from window_until observe_minutes <<EOF
+$values
+EOF
+
+if [ "$force" -ne 1 ]; then
+  now=$(TZ=America/Lima date +%H%M)
+  from=$(printf '%s' "$window_from" | tr -d ':')
+  until=$(printf '%s' "$window_until" | tr -d ':')
+  if [ "$from" -le "$until" ]; then
+    [ "$now" -ge "$from" ] && [ "$now" -lt "$until" ] || exit 0
+  else
+    [ "$now" -ge "$from" ] || [ "$now" -lt "$until" ] || exit 0
+  fi
+fi
+
+report "$campaign" "$release" activating
+staging="/opt/naiskos/releases/.staging-$release"
+rm -rf -- "$staging"
+mkdir -p -- "$staging"
+if tar -tzf "$archive" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
+  report "$campaign" "$release" failed "El archivo contiene rutas no permitidas"
+  rm -rf -- "$staging"
+  exit 1
+fi
+if tar -tvzf "$archive" | awk 'substr($1,1,1)=="l" || substr($1,1,1)=="h" { found=1 } END { exit found ? 0 : 1 }'; then
+  report "$campaign" "$release" failed "El archivo contiene enlaces no permitidos"
+  rm -rf -- "$staging"
+  exit 1
+fi
+tar -xzf "$archive" -C "$staging" --no-same-owner --no-same-permissions
+$helper verify-extracted "$manifest" "$staging"
+
+previous=$(basename "$(readlink -f /opt/naiskos/current 2>/dev/null || true)")
+for migration in $($helper migrations "$manifest"); do
+  apply="$staging/migrations/$migration/apply"
+  [ -x "$apply" ] || { report "$campaign" "$release" failed "Migración sin ejecutable apply: $migration"; exit 1; }
+  NAISKOS_MIGRATION_ID="$migration" NAISKOS_PREVIOUS_RELEASE="$previous" "$apply"
+done
+
+destination="/opt/naiskos/releases/$release"
+[ ! -e "$destination" ] || { report "$campaign" "$release" failed "La versión ya existe de forma inesperada"; exit 1; }
+mv -- "$staging" "$destination"
+cp -- "$manifest" "$destination/release.json"
+chown -R root:root "$destination"
+ln -sfn "$destination" /opt/naiskos/current.next
+mv -Tf /opt/naiskos/current.next /opt/naiskos/current
+
+/opt/node24/bin/node -e '
+  const fs=require("fs"),p=process.argv[1];
+  const s={campaignId:process.argv[2],releaseId:process.argv[3],previous:process.argv[4],activatedAt:new Date().toISOString(),observeMinutes:Number(process.argv[5]),failures:0};
+  fs.writeFileSync(p+".tmp",JSON.stringify(s)+"\n",{mode:0o600}); fs.renameSync(p+".tmp",p);
+' "$observation" "$campaign" "$release" "$previous" "$observe_minutes"
+rm -f -- "$request"
+restart_runtime
+sleep 5
+if curl -fsS --max-time 10 http://127.0.0.1:8080/api/v1/health >/dev/null; then
+  report "$campaign" "$release" observing
+else
+  report "$campaign" "$release" observing "La primera comprobación de salud quedó pendiente"
+fi

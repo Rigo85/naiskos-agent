@@ -178,6 +178,60 @@ export async function buildApp(
       return reply.code(202).send({ accepted: true, id });
     },
   );
+  app.post<{
+    Body: {
+      campaignId?: string;
+      releaseId?: string;
+      status?: string;
+      error?: string;
+    };
+  }>("/api/v1/system/release-events", async (request, reply) => {
+    if (request.headers["x-naiskos-request"] !== "release-activator") {
+      return reply.code(403).send({ error: "Solicitud local inválida" });
+    }
+    const { campaignId, releaseId, status, error } = request.body ?? {};
+    const allowed = new Set(["activating", "observing", "installed", "failed", "rolled_back"]);
+    if (
+      typeof campaignId !== "string" ||
+      typeof releaseId !== "string" ||
+      typeof status !== "string" ||
+      !allowed.has(status)
+    ) {
+      return reply.code(400).send({ error: "Estado de release inválido" });
+    }
+    const id = await engine.enqueueEvent({
+      type: "software.release.status",
+      at: new Date().toISOString(),
+      campaignId,
+      releaseId,
+      status,
+      ...(typeof error === "string" ? { error: error.slice(0, 1_000) } : {}),
+    });
+    void engine.sync().catch(() => undefined);
+    return reply.code(202).send({ accepted: true, id });
+  });
+  app.post<{
+    Body: { count?: number; rebootRequired?: boolean; error?: string };
+  }>("/api/v1/system/update-events", async (request, reply) => {
+    if (request.headers["x-naiskos-request"] !== "system-update-check") {
+      return reply.code(403).send({ error: "Solicitud local inválida" });
+    }
+    const count = Number(request.body?.count);
+    if (!Number.isSafeInteger(count) || count < 0 || count > 10_000) {
+      return reply.code(400).send({ error: "Conteo inválido" });
+    }
+    const id = await engine.enqueueEvent({
+      type: "system.updates.checked",
+      at: new Date().toISOString(),
+      count,
+      rebootRequired: request.body?.rebootRequired === true,
+      ...(typeof request.body?.error === "string"
+        ? { error: request.body.error.slice(0, 1_000) }
+        : {}),
+    });
+    void engine.sync().catch(() => undefined);
+    return reply.code(202).send({ accepted: true, id });
+  });
   app.get("/api/v1/manifest", async (_request, reply) => {
     reply.header("etag", `"${engine.currentManifest().version}"`);
     return engine.currentManifest();
@@ -236,6 +290,34 @@ export async function buildApp(
         });
     }
   });
+
+  app.post<{ Body: { ids?: string[] } }>(
+    "/api/v1/media/batch/delete",
+    async (request, reply) => {
+      if (request.headers["x-naiskos-request"] !== "viewer") {
+        return reply.code(403).send({ error: "Solicitud local inválida" });
+      }
+      const ids = [...new Set(request.body?.ids ?? [])];
+      if (ids.length < 1 || ids.length > 100 || ids.some((id) => typeof id !== "string")) {
+        return reply.code(400).send({ error: "Selección inválida" });
+      }
+      const existing = new Set(engine.currentManifest().media.map((item) => item.id));
+      if (ids.some((id) => !existing.has(id))) {
+        return reply.code(404).send({ error: "Uno o más medios no existen" });
+      }
+      const at = new Date().toISOString();
+      for (const mediaId of ids) {
+        await engine.enqueueEvent({ type: "media.deleted", at, mediaId, batch: true });
+      }
+      void engine.sync().catch((error) =>
+        request.log.warn(
+          { err: errorForLog(error), count: ids.length },
+          "Eliminación múltiple pendiente de sincronización",
+        ),
+      );
+      return reply.code(202).send({ accepted: true, count: ids.length });
+    },
+  );
 
   app.post("/api/v1/settings/reset", async () => {
     const { DEFAULT_SETTINGS } = await import("./types.js");

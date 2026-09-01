@@ -1,0 +1,12 @@
+[Unit]
+Description=Consulta actualizaciones pendientes del SO sin instalarlas
+After=network-online.target naiskos-agent.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/naiskos/bin/naiskos-system-update-check
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=strict

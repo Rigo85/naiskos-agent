@@ -16,6 +16,7 @@ import {
 } from "./types.js";
 import { emptyManifest } from "./validation.js";
 import { errorForLog } from "./logging.js";
+import { SoftwareUpdateManager } from "./software-update.js";
 
 const config = loadConfig();
 await loadProvisionedCredentials(config);
@@ -34,6 +35,9 @@ const notifications =
 await writeJsonAtomic(notificationsFile, notifications);
 
 const engine = new SyncEngine(config, manifest, weather, notifications);
+const softwareUpdates = new SoftwareUpdateManager(config, (event) =>
+  engine.enqueueEvent(event),
+);
 const provisioning = new ProvisioningManager(config, (frameId) =>
   engine.configure(frameId),
 );
@@ -67,6 +71,15 @@ void engine
   .catch((error) =>
     app.log.warn({ err: errorForLog(error) }, "Sincronización inicial fallida"),
   );
+const softwareTimer = setInterval(() => {
+  void softwareUpdates.check().catch((error) =>
+    app.log.warn({ err: errorForLog(error) }, "Consulta de software fallida"),
+  );
+}, config.softwareCheckIntervalMs);
+softwareTimer.unref();
+void softwareUpdates.check().catch((error) =>
+  app.log.warn({ err: errorForLog(error) }, "Consulta inicial de software fallida"),
+);
 
 let terminatingAfterFatalError = false;
 
@@ -107,6 +120,7 @@ process.on("unhandledRejection", (reason) =>
 async function shutdown(signal: string): Promise<void> {
   clearInterval(syncTimer);
   clearInterval(provisioningTimer);
+  clearInterval(softwareTimer);
   app.log.info({ signal }, "Deteniendo agente local");
   await app.close();
   process.exit(0);

@@ -1,0 +1,10 @@
+[Unit]
+Description=Activa una release verificada de Naiskos
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/naiskos/bin/naiskos-release-activate
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

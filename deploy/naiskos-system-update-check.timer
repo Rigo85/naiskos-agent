@@ -1,0 +1,11 @@
+[Unit]
+Description=Consulta diaria de actualizaciones del SO
+
+[Timer]
+OnCalendar=*-*-* {{ naiskos_profile.schedule.update_check_at }}:00
+AccuracySec=2min
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

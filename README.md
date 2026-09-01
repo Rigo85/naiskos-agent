@@ -143,6 +143,23 @@ habilita reproducción automática y usa `systemd-inhibit`. Los nombres de
 usuario, salidas de video y rutas de escritorio son propios de cada equipo y no
 están fijados en este repositorio.
 
+## Actualización conjunta con el visor
+
+El agente consulta asignaciones de software separadas del manifiesto de
+medios. Descarga en `/var/lib/naiskos/updates`, reanuda el archivo y verifica
+la firma Ed25519, tamaño, SHA-256, arquitectura, Node 24 y baseline mínimo.
+Después escribe una solicitud atómica; nunca modifica `/opt` ni ejecuta la
+release.
+
+`naiskos-release-activate.timer` ejecuta como root el activador restringido.
+Éste vuelve a verificar, rechaza rutas o enlaces inseguros, valida cada archivo
+declarado, cambia `/opt/naiskos/current` de forma atómica y observa salud. Tres
+fallos consecutivos restauran la release anterior. `--force` existe sólo para
+la aceptación administrativa fuera de la ventana nocturna.
+
+La consulta del SO es independiente: `naiskos-system-update-check.timer`
+simula diariamente un `dist-upgrade`, pero no instala ni reinicia.
+
 ## Seguridad y operación
 
 - `.env`, `data/`, `dist/`, logs y medios están excluidos de Git.

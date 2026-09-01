@@ -18,6 +18,8 @@ export interface AgentConfig {
   telemetryHeartbeatIntervalMs?: number;
   telemetryFullIntervalMs?: number;
   diskBlockPercent: number;
+  softwareCheckIntervalMs: number;
+  releasePublicKeyPath: string;
 }
 
 function integer(
@@ -79,5 +81,14 @@ export function loadConfig(): AgentConfig {
       60 * 60_000,
     ),
     diskBlockPercent: integer("NAISKOS_DISK_BLOCK_PERCENT", 90, 50, 99),
+    softwareCheckIntervalMs: integer(
+      "NAISKOS_SOFTWARE_CHECK_INTERVAL_MS",
+      60_000,
+      60_000,
+      24 * 60 * 60_000,
+    ),
+    releasePublicKeyPath:
+      process.env.NAISKOS_RELEASE_PUBLIC_KEY_PATH ??
+      "/etc/naiskos/release-signing-public.pem",
   };
 }
