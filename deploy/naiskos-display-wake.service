@@ -14,5 +14,4 @@ ExecStart=/opt/naiskos/bin/naiskos-display-power on
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=true
-
+ProtectHome=read-only
