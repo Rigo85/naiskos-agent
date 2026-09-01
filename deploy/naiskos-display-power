@@ -70,7 +70,18 @@ display_state() {
     '$1 == connector { print $2; exit }'
 }
 
+pause_viewer() {
+  /usr/bin/pkill -STOP -x chromium 2>/dev/null || true
+}
+
+resume_viewer() {
+  /usr/bin/pkill -CONT -x chromium 2>/dev/null || true
+}
+
 attempt=1
+if [ "$ACTION" = off ]; then
+  pause_viewer
+fi
 while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
   if [ "$ACTION" = off ]; then
     /usr/bin/wlopm --off "$CONNECTOR" >/dev/null 2>&1 || true
@@ -85,8 +96,11 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
   state=$(display_state || true)
   if { [ "$ACTION" = on ] && [ "$state" = on ]; } || \
      { [ "$ACTION" = off ] && [ "$state" = off ]; }; then
+    if [ "$ACTION" = on ]; then
+      resume_viewer
+    fi
     logger --priority daemon.notice --tag "$LOG_TAG" -- \
-      "action=$ACTION result=succeeded attempts=$attempt connector=$CONNECTOR state=$state wayland=$WAYLAND_DISPLAY"
+      "action=$ACTION result=succeeded attempts=$attempt connector=$CONNECTOR state=$state viewer=$([ "$ACTION" = on ] && printf resumed || printf paused) wayland=$WAYLAND_DISPLAY"
     report_event succeeded "$attempt" || true
     exit 0
   fi
@@ -94,6 +108,9 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
   attempt=$((attempt + 1))
 done
 
+if [ "$ACTION" = off ]; then
+  resume_viewer
+fi
 logger --priority daemon.err --tag "$LOG_TAG" -- \
   "action=$ACTION result=failed attempts=$MAX_ATTEMPTS connector=$CONNECTOR state=${state:-unknown} wayland=$WAYLAND_DISPLAY"
 report_event failed "$MAX_ATTEMPTS" || true
