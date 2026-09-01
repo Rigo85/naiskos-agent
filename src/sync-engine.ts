@@ -27,6 +27,12 @@ import {
   collectFileSystemUsage,
   collectFrameDataUsage,
 } from "./storage-usage.js";
+import {
+  collectSystemTelemetry,
+  heartbeatTelemetry,
+  telemetryErrorCode,
+  type FullTelemetry,
+} from "./telemetry.js";
 
 export class SyncEngine {
   readonly manifestFile: string;
@@ -39,6 +45,10 @@ export class SyncEngine {
   private manifestChain: Promise<unknown> = Promise.resolve();
   private nextWeatherSyncAt = 0;
   private nextDataUsageScanAt = 0;
+  private nextHeartbeatAt = 0;
+  private nextFullTelemetryAt = 0;
+  private desiredManifestVersion: number;
+  private lastHeartbeatSignature = "";
 
   constructor(
     private readonly config: AgentConfig,
@@ -63,6 +73,7 @@ export class SyncEngine {
     this.mediaRoot = path.join(config.dataRoot, "media");
     this.weatherFile = path.join(config.dataRoot, "weather.json");
     this.notificationsFile = path.join(config.dataRoot, "notifications.json");
+    this.desiredManifestVersion = this.manifest.version;
     this.status = {
       state:
         config.frameId && config.centralUrl && config.token
@@ -238,6 +249,7 @@ export class SyncEngine {
       if (!response.ok)
         throw new Error(`Central respondió HTTP ${response.status}`);
       const remote = validateRemoteManifest(await response.json(), frameId);
+      this.desiredManifestVersion = remote.version;
       if (remote.version <= this.manifest.version) {
         this.markSuccess();
         return "unchanged";
@@ -348,6 +360,26 @@ export class SyncEngine {
   private async reportTelemetry(): Promise<void> {
     const { frameId, centralUrl, token } = this.config;
     if (!frameId || !centralUrl || !token) return;
+    const now = Date.now();
+    const fullInterval = this.config.telemetryFullIntervalMs ?? 5 * 60_000;
+    const heartbeatInterval = this.config.telemetryHeartbeatIntervalMs ?? 60_000;
+    const signature = `${this.status.state}:${telemetryErrorCode(this.status.lastError) ?? ""}`;
+    let payload: FullTelemetry | ReturnType<typeof heartbeatTelemetry>;
+    if (now >= this.nextFullTelemetryAt) {
+      this.nextFullTelemetryAt = now + jitter(fullInterval);
+      this.nextHeartbeatAt = now + jitter(heartbeatInterval);
+      payload = await collectSystemTelemetry(
+        this.config,
+        this.status,
+        await this.pendingOutboxCount(),
+        this.desiredManifestVersion,
+      );
+    } else if (now >= this.nextHeartbeatAt || signature !== this.lastHeartbeatSignature) {
+      this.nextHeartbeatAt = now + jitter(heartbeatInterval);
+      payload = heartbeatTelemetry(this.status);
+    } else {
+      return;
+    }
     const response = await fetch(
       `${centralUrl}/api/v1/frames/${encodeURIComponent(frameId)}/telemetry`,
       {
@@ -356,12 +388,21 @@ export class SyncEngine {
           authorization: `Bearer ${token}`,
           "content-type": "application/json",
         },
-        body: JSON.stringify(this.status),
+        body: JSON.stringify(payload),
         signal: AbortSignal.timeout(20_000),
       },
     );
     if (!response.ok)
       throw new Error(`Central respondió HTTP ${response.status}`);
+    this.lastHeartbeatSignature = signature;
+  }
+
+  private async pendingOutboxCount(): Promise<number> {
+    const events =
+      (await readJson<Array<Record<string, unknown>>>(
+        path.join(this.config.dataRoot, "outbox.json"),
+      )) ?? [];
+    return events.length;
   }
 
   private recordAuxiliaryError(scope: string, error: unknown): void {
@@ -593,4 +634,8 @@ export class SyncEngine {
       this.nextDataUsageScanAt = Date.now() + 5 * 60_000;
     }
   }
+}
+
+function jitter(intervalMs: number): number {
+  return Math.round(intervalMs * (0.9 + Math.random() * 0.2));
 }

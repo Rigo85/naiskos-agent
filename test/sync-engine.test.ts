@@ -164,8 +164,14 @@ describe("sincronización del agente", () => {
     expect(engine.status.state).toBe("ready");
     expect(engine.status.lastError).toBe("Outbox: Central respondió HTTP 500");
     expect(telemetry).toMatchObject({
-      state: "ready",
-      lastError: "Outbox: Central respondió HTTP 500",
+      schemaVersion: 1,
+      kind: "full",
+      frameId,
+      sync: {
+        state: "idle",
+        lastErrorCode: "outbox",
+        pendingOutbox: 1,
+      },
     });
     expect(calls.findIndex((url) => url.endsWith("/events"))).toBeLessThan(
       calls.findIndex((url) => url.endsWith("/manifest")),

@@ -79,6 +79,8 @@ Copia `.env.example` fuera de Git y carga sus variables mediante systemd o
 | `NAISKOS_FRAME_ID` / `NAISKOS_AGENT_TOKEN` | Credencial ya provisionada | lectura automática si existe |
 | `NAISKOS_FRAME_WIDTH` / `NAISKOS_FRAME_HEIGHT` | Perfil físico del marco | `1280 × 800` |
 | `NAISKOS_SYNC_INTERVAL_MS` | Consulta de manifiesto y outbox | `5000` |
+| `NAISKOS_TELEMETRY_HEARTBEAT_INTERVAL_MS` | Contacto ligero con la central | `60000` |
+| `NAISKOS_TELEMETRY_FULL_INTERVAL_MS` | Muestra completa de salud | `300000` |
 | `NAISKOS_WEATHER_SYNC_INTERVAL_MS` | Consulta separada del clima | `60000` |
 | `NAISKOS_DISK_BLOCK_PERCENT` | Umbral que bloquea nuevas descargas | `90` |
 
@@ -173,6 +175,13 @@ El recorrido de la data se actualiza cada cinco minutos y después de instalar
 contenido nuevo; la consulta barata del filesystem ocurre en cada ciclo. El
 servicio de métricas descarta su salida estándar porque cada muestra ya se
 envía una vez al journal con el identificador `naiskos-metrics`.
+
+Además, el agente envía un heartbeat remoto aproximadamente cada minuto y una
+muestra completa aproximadamente cada cinco minutos. Ambas cadencias llevan
+una dispersión aleatoria de ±10 %; un cambio de estado o error adelanta el
+siguiente heartbeat. La muestra incluye únicamente salud técnica, versiones,
+recursos, sincronización, pantalla, audio y reloj. No incluye nombres de
+medios, fotografías, videos, miniaturas, capturas ni actividad de personas.
 
 El historial técnico del piloto está en
 [`docs/piloto-rpi-2026-08-29.md`](docs/piloto-rpi-2026-08-29.md); no sustituye la

@@ -15,6 +15,8 @@ export interface AgentConfig {
   frameHeight: number;
   syncIntervalMs: number;
   weatherSyncIntervalMs: number;
+  telemetryHeartbeatIntervalMs?: number;
+  telemetryFullIntervalMs?: number;
   diskBlockPercent: number;
 }
 
@@ -63,6 +65,18 @@ export function loadConfig(): AgentConfig {
       60_000,
       60_000,
       24 * 60 * 60_000,
+    ),
+    telemetryHeartbeatIntervalMs: integer(
+      "NAISKOS_TELEMETRY_HEARTBEAT_INTERVAL_MS",
+      60_000,
+      30_000,
+      10 * 60_000,
+    ),
+    telemetryFullIntervalMs: integer(
+      "NAISKOS_TELEMETRY_FULL_INTERVAL_MS",
+      5 * 60_000,
+      60_000,
+      60 * 60_000,
     ),
     diskBlockPercent: integer("NAISKOS_DISK_BLOCK_PERCENT", 90, 50, 99),
   };
