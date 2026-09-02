@@ -1,0 +1,68 @@
+#!/bin/sh
+set -eu
+
+[ -f /.dockerenv ] || {
+  echo "Esta prueba modifica /etc/naiskos y sólo puede ejecutarse en un contenedor." >&2
+  exit 1
+}
+[ "$(id -u)" -eq 0 ] || {
+  echo "La prueba debe ejecutarse como root dentro del contenedor." >&2
+  exit 1
+}
+
+agent_root=${NAISKOS_AGENT_TEST_ROOT:-/workspace-agent}
+helper="$agent_root/deploy/naiskos-release-helper.mjs"
+fixture="$agent_root/test/fixtures/declarative-migration/baseline-003-test"
+baseline=/etc/naiskos/baseline.json
+state_root=/var/lib/naiskos/migrations
+test_root=/tmp/naiskos-declarative-test
+
+cleanup() {
+  rm -rf -- /etc/naiskos /var/lib/naiskos "$test_root"
+}
+trap cleanup EXIT HUP INT TERM
+cleanup
+mkdir -p /etc/naiskos /var/lib/naiskos "$test_root"
+printf '%s\n' \
+  '{' \
+  '  "schemaVersion": 1,' \
+  '  "baselineVersion": "2",' \
+  '  "hardwareProfile": "rpi4-2gb-sunfounder-ts10"' \
+  '}' >"$baseline"
+chmod 0640 "$baseline"
+
+node "$helper" verify-migration "$fixture/migration.json" "$fixture" "$baseline" >/dev/null
+test "$(node "$helper" apply-migration "$fixture/migration.json" "$fixture" "$baseline" "$state_root")" = \
+  "applied|baseline-003-test"
+grep -q '"baselineVersion": "3"' "$baseline"
+cmp "$fixture/payload/marker.json" /etc/naiskos/baseline.d/0003-test.json
+
+test "$(node "$helper" apply-migration "$fixture/migration.json" "$fixture" "$baseline" "$state_root")" = \
+  "already-current|baseline-003-test"
+
+cp -R "$fixture" "$test_root/baseline-003-test"
+sed -i 's#^      "destination": ".*"#      "destination": "/tmp/no-permitido.json"#' \
+  "$test_root/baseline-003-test/migration.json"
+if node "$helper" verify-migration \
+  "$test_root/baseline-003-test/migration.json" "$test_root/baseline-003-test" "$baseline" \
+  >/dev/null 2>&1; then
+  echo "El motor aceptó un destino fuera de las rutas administradas." >&2
+  exit 1
+fi
+
+rm -rf -- "$test_root/baseline-003-test"
+cp -R "$fixture" "$test_root/baseline-003-test"
+printf '%s\n' 'alterado' >>"$test_root/baseline-003-test/payload/marker.json"
+if node "$helper" verify-migration \
+  "$test_root/baseline-003-test/migration.json" "$test_root/baseline-003-test" "$baseline" \
+  >/dev/null 2>&1; then
+  echo "El motor aceptó una fuente cuyo SHA-256 no coincide." >&2
+  exit 1
+fi
+
+node "$helper" rollback-migration baseline-003-test "$baseline" "$state_root" >/dev/null
+grep -q '"baselineVersion": "2"' "$baseline"
+test ! -e /etc/naiskos/baseline.d/0003-test.json
+test "$(stat -c %a "$baseline")" = "640"
+
+echo "ok: migración declarativa aplicable, idempotente y reversible"

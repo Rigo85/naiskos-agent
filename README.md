@@ -153,9 +153,18 @@ release.
 
 `naiskos-release-activate.timer` ejecuta como root el activador restringido.
 Éste vuelve a verificar, rechaza rutas o enlaces inseguros, valida cada archivo
-declarado, cambia `/opt/naiskos/current` de forma atómica y observa salud. Tres
-fallos consecutivos restauran la release anterior. `--force` existe sólo para
-la aceptación administrativa fuera de la ventana nocturna.
+declarado y sólo admite migraciones de baseline con descriptor versión 2. El
+descriptor limita arquitectura, perfil de hardware, versión origen/destino,
+espacio, archivos, propietarios y unidades `naiskos-*`; nunca ejecuta un
+`apply` recibido. Antes de tocar el sistema guarda archivos, permisos, estados
+de unidades y baseline en `/var/lib/naiskos/migrations`.
+
+Después cambia `/opt/naiskos/current` de forma atómica y observa salud. Tres
+fallos consecutivos restauran la release anterior y revierten, en orden
+inverso, sus migraciones. Repetir una migración ya aplicada no duplica el
+cambio. Las migraciones con reinicio o irreversibles se rechazan y pertenecen
+a un procedimiento separado. `--force` existe sólo para la aceptación
+administrativa fuera de la ventana nocturna.
 
 La consulta del SO es independiente: `naiskos-system-update-check.timer`
 simula diariamente un `dist-upgrade`, pero no instala ni reinicia.

@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 2,
+  "migrationId": "baseline-003-test",
+  "description": "Prueba desechable del motor declarativo.",
+  "fromVersion": "2",
+  "toVersion": "3",
+  "architectures": ["x64"],
+  "hardwareProfiles": ["rpi4-2gb-sunfounder-ts10"],
+  "minimumFreeBytes": 1024,
+  "reversible": true,
+  "rebootRequired": false,
+  "daemonReload": false,
+  "files": [
+    {
+      "operation": "install",
+      "source": "payload/marker.json",
+      "destination": "/etc/naiskos/baseline.d/0003-test.json",
+      "sha256": "ed86a7c458dc2a4363a1eb2bbe1663d4c5fbe2f08a5c9f4b9402ae6faa2e09f8",
+      "mode": "0644",
+      "owner": "root",
+      "group": "root"
+    }
+  ],
+  "units": []
+}
