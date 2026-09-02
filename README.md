@@ -166,8 +166,9 @@ de almacenamiento omite defensivamente una ruta administrativa inaccesible en
 vez de degradar la sincronización completa.
 
 Después cambia `/opt/naiskos/current` de forma atómica y observa salud. Una
-respuesta HTTP sólo es válida cuando el JSON declara simultáneamente
-`ok: true` y `state: "ready"`. Tres fallos consecutivos restauran la release
+respuesta HTTP sólo es válida cuando el JSON declara `ok: true` y el estado es
+`ready` o `syncing`; los estados `unconfigured`, `storage-blocked`, `offline`
+o `error` cuentan como fallo. Tres fallos consecutivos restauran la release
 anterior y revierten, en orden inverso, sus migraciones. Repetir una migración
 ya aplicada no duplica el cambio. Las migraciones con reinicio o irreversibles
 se rechazan y pertenecen a un procedimiento separado. `--force` existe sólo

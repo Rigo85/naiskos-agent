@@ -26,15 +26,7 @@ restart_runtime() {
 
 local_health() {
   curl -fsS --max-time 10 http://127.0.0.1:8080/api/v1/health |
-    /opt/node24/bin/node -e '
-      let body="";
-      process.stdin.on("data",chunk=>body+=chunk).on("end",()=>{
-        try {
-          const health=JSON.parse(body);
-          process.exit(health.ok===true && health.state==="ready" ? 0 : 1);
-        } catch { process.exit(1); }
-      });
-    '
+    "$helper" verify-health >/dev/null
 }
 
 rollback_migrations() {
@@ -134,12 +126,24 @@ for migration in $($helper migrations "$manifest"); do
     rm -rf -- "$staging"
     exit 1
   fi
+  migration_status=${migration_result%%|*}
   migration_id=${migration_result#*|}
-  if [ -n "$applied_migrations" ]; then
-    applied_migrations="$migration_id,$applied_migrations"
-  else
-    applied_migrations=$migration_id
-  fi
+  case "$migration_status" in
+    applied)
+      if [ -n "$applied_migrations" ]; then
+        applied_migrations="$migration_id,$applied_migrations"
+      else
+        applied_migrations=$migration_id
+      fi
+      ;;
+    already-current) ;;
+    *)
+      rollback_migrations "$applied_migrations" || true
+      report "$campaign" "$release" failed "Resultado inesperado de migración: $migration"
+      rm -rf -- "$staging"
+      exit 1
+      ;;
+  esac
 done
 
 destination="/opt/naiskos/releases/$release"

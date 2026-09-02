@@ -108,6 +108,12 @@ if (command === "verify-request") {
   const [stateRoot] = args.map(required);
   await repairMigrationPermissions(stateRoot);
   process.stdout.write("repaired");
+} else if (command === "verify-health") {
+  const health = JSON.parse(await readFile("/dev/stdin", "utf8"));
+  if (health?.ok !== true || !["ready", "syncing"].includes(health?.state)) {
+    fail("Salud local no operativa");
+  }
+  process.stdout.write(health.state);
 } else if (command === "report") {
   const [campaignId, releaseId, status, error = ""] = args;
   if (!uuidPattern(campaignId ?? "") || !releaseIdPattern(releaseId ?? "")) fail("Reporte inválido");

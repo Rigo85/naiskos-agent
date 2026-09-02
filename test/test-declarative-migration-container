@@ -54,6 +54,18 @@ if node "$helper" repair-migration-permissions "$state_root" >/dev/null 2>&1; th
 fi
 rm -- "$state_root/migration-symlink"
 
+for healthy_state in ready syncing; do
+  test "$(printf '{"ok":true,"state":"%s"}' "$healthy_state" | node "$helper" verify-health)" = \
+    "$healthy_state"
+done
+for unhealthy_state in unconfigured storage-blocked offline error; do
+  if printf '{"ok":true,"state":"%s"}' "$unhealthy_state" | \
+    node "$helper" verify-health >/dev/null 2>&1; then
+    echo "La salud aceptó un estado no operativo: $unhealthy_state" >&2
+    exit 1
+  fi
+done
+
 test "$(node "$helper" apply-migration "$fixture/migration.json" "$fixture" "$baseline" "$state_root")" = \
   "already-current|baseline-003-test"
 
