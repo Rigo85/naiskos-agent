@@ -9,6 +9,7 @@ import {
   copyFile,
   lstat,
   mkdir,
+  readdir,
   readFile,
   realpath,
   rename,
@@ -103,6 +104,10 @@ if (command === "verify-request") {
   if (!migrationIdPattern(migrationId)) fail("ID de migración inválido");
   await rollbackMigration(migrationId, baselineFile, stateRoot);
   process.stdout.write(`rolled-back|${migrationId}`);
+} else if (command === "repair-migration-permissions") {
+  const [stateRoot] = args.map(required);
+  await repairMigrationPermissions(stateRoot);
+  process.stdout.write("repaired");
 } else if (command === "report") {
   const [campaignId, releaseId, status, error = ""] = args;
   if (!uuidPattern(campaignId ?? "") || !releaseIdPattern(releaseId ?? "")) fail("Reporte inválido");
@@ -151,7 +156,9 @@ async function applyMigration(descriptorFile, migrationRoot, baselineFile, state
   if (freeBytes < descriptor.minimumFreeBytes) fail("Espacio insuficiente para la migración");
 
   await rm(migrationStateRoot, { recursive: true, force: true });
-  await mkdir(path.join(migrationStateRoot, "files"), { recursive: true, mode: 0o700 });
+  await ensureMigrationDirectory(stateRoot);
+  await ensureMigrationDirectory(migrationStateRoot);
+  await ensureMigrationDirectory(path.join(migrationStateRoot, "files"));
   const baselineDetails = await stat(baselineFile);
   const baselineBackup = path.join(migrationStateRoot, "baseline.before.json");
   await copyFile(baselineFile, baselineBackup);
@@ -470,6 +477,37 @@ function assertSafeDestination(destination) {
 
 async function writeBaselineVersion(baselineFile, baseline, version) {
   await writeJsonAtomic(baselineFile, { ...baseline, baselineVersion: version }, null);
+}
+
+async function ensureMigrationDirectory(directory) {
+  await mkdir(directory, { recursive: true, mode: 0o750 });
+  await chmod(directory, 0o750);
+  await chown(directory, 0, await accountId("/etc/group", "naiskos"));
+}
+
+async function repairMigrationPermissions(stateRoot) {
+  const root = path.resolve(stateRoot);
+  if (root !== "/var/lib/naiskos/migrations") fail("Raíz de migraciones no permitida");
+  await ensureMigrationDirectory(root);
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    if (!migrationIdPattern(entry.name)) continue;
+    if (entry.isSymbolicLink()) fail(`Migración con enlace simbólico: ${entry.name}`);
+    if (!entry.isDirectory()) continue;
+    const migrationRoot = path.join(root, entry.name);
+    const details = await lstat(migrationRoot);
+    if (!details.isDirectory() || details.isSymbolicLink()) {
+      fail(`Directorio de migración inválido: ${entry.name}`);
+    }
+    await ensureMigrationDirectory(migrationRoot);
+    const filesRoot = path.join(migrationRoot, "files");
+    if (await exists(filesRoot)) {
+      const filesDetails = await lstat(filesRoot);
+      if (!filesDetails.isDirectory() || filesDetails.isSymbolicLink()) {
+        fail(`Directorio de respaldos inválido: ${entry.name}`);
+      }
+      await ensureMigrationDirectory(filesRoot);
+    }
+  }
 }
 
 async function loadBaseline(baselineFile) {

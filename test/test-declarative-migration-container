@@ -22,6 +22,7 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 cleanup
+groupadd --system naiskos
 mkdir -p /etc/naiskos /var/lib/naiskos "$test_root"
 printf '%s\n' \
   '{' \
@@ -36,6 +37,22 @@ test "$(node "$helper" apply-migration "$fixture/migration.json" "$fixture" "$ba
   "applied|baseline-003-test"
 grep -q '"baselineVersion": "3"' "$baseline"
 cmp "$fixture/payload/marker.json" /etc/naiskos/baseline.d/0003-test.json
+test "$(stat -c %a "$state_root")" = "750"
+test "$(stat -c %U:%G "$state_root")" = "root:naiskos"
+test "$(stat -c %a "$state_root/baseline-003-test")" = "750"
+test "$(stat -c %U:%G "$state_root/baseline-003-test")" = "root:naiskos"
+
+chmod 0700 "$state_root" "$state_root/baseline-003-test" "$state_root/baseline-003-test/files"
+chown root:root "$state_root" "$state_root/baseline-003-test" "$state_root/baseline-003-test/files"
+test "$(node "$helper" repair-migration-permissions "$state_root")" = "repaired"
+test "$(stat -c %a "$state_root/baseline-003-test/files")" = "750"
+test "$(stat -c %U:%G "$state_root/baseline-003-test/files")" = "root:naiskos"
+ln -s /tmp "$state_root/migration-symlink"
+if node "$helper" repair-migration-permissions "$state_root" >/dev/null 2>&1; then
+  echo "La reparación aceptó una migración con enlace simbólico." >&2
+  exit 1
+fi
+rm -- "$state_root/migration-symlink"
 
 test "$(node "$helper" apply-migration "$fixture/migration.json" "$fixture" "$baseline" "$state_root")" = \
   "already-current|baseline-003-test"

@@ -13,6 +13,8 @@ force=0
 exec 9>/run/naiskos-release-activate.lock
 /usr/bin/flock --nonblock 9 || exit 0
 
+"$helper" repair-migration-permissions "$migration_state_root"
+
 report() {
   "$helper" report "$1" "$2" "$3" "${4:-}" || true
 }
@@ -20,6 +22,19 @@ report() {
 restart_runtime() {
   systemctl restart naiskos-agent.service
   pkill -TERM -x chromium 2>/dev/null || true
+}
+
+local_health() {
+  curl -fsS --max-time 10 http://127.0.0.1:8080/api/v1/health |
+    /opt/node24/bin/node -e '
+      let body="";
+      process.stdin.on("data",chunk=>body+=chunk).on("end",()=>{
+        try {
+          const health=JSON.parse(body);
+          process.exit(health.ok===true && health.state==="ready" ? 0 : 1);
+        } catch { process.exit(1); }
+      });
+    '
 }
 
 rollback_migrations() {
@@ -45,7 +60,7 @@ if [ -s "$observation" ]; then
   IFS='|' read -r campaign release previous activated_at observe_minutes failures applied_migrations <<EOF
 $values
 EOF
-  if curl -fsS --max-time 5 http://127.0.0.1:8080/api/v1/health >/dev/null; then
+  if local_health; then
     activated_epoch=$(date -d "$activated_at" +%s)
     now_epoch=$(date +%s)
     if [ $((now_epoch - activated_epoch)) -ge $((observe_minutes * 60)) ]; then
@@ -144,7 +159,7 @@ mv -Tf /opt/naiskos/current.next /opt/naiskos/current
 rm -f -- "$request"
 restart_runtime
 sleep 5
-if curl -fsS --max-time 10 http://127.0.0.1:8080/api/v1/health >/dev/null; then
+if local_health; then
   report "$campaign" "$release" observing
 else
   report "$campaign" "$release" observing "La primera comprobación de salud quedó pendiente"

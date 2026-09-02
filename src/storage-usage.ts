@@ -39,13 +39,22 @@ async function allocatedTreeBytes(
   let trackedBytes = 0;
 
   async function walk(current: string, tracked: boolean): Promise<void> {
-    const details = await stat(current);
+    const details = await stat(current).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "EACCES" || error.code === "EPERM") return null;
+      throw error;
+    });
+    if (!details) return;
     const bytes = allocatedBytes(details.blocks, details.size);
     totalBytes += bytes;
     if (tracked) trackedBytes += bytes;
     if (!details.isDirectory()) return;
 
-    const entries = await readdir(current, { withFileTypes: true });
+    const entries = await readdir(current, { withFileTypes: true }).catch(
+      (error: NodeJS.ErrnoException) => {
+        if (error.code === "EACCES" || error.code === "EPERM") return [];
+        throw error;
+      },
+    );
     for (const entry of entries) {
       // No seguimos enlaces: la data externa no pertenece al marco y un ciclo
       // no debe bloquear la recolección.

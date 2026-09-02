@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -37,5 +37,24 @@ describe("collectStorageUsage", () => {
     expect(usage.diskUsedPercent).toBeLessThan(100);
     expect(usage.mediaDataBytes).toBeGreaterThanOrEqual(mediaDetails.blocks * 512);
     expect(usage.frameDataBytes).toBeGreaterThan(usage.mediaDataBytes);
+  });
+
+  it("no invalida toda la medición por un directorio de sistema inaccesible", async () => {
+    const dataRoot = await mkdtemp(path.join(os.tmpdir(), "naiskos-storage-permissions-"));
+    temporaryDirectories.push(dataRoot);
+    const mediaRoot = path.join(dataRoot, "media");
+    const protectedRoot = path.join(dataRoot, "migrations");
+    await mkdir(mediaRoot);
+    await mkdir(protectedRoot);
+    await writeFile(path.join(mediaRoot, "sample.webp"), Buffer.alloc(4096));
+    await chmod(protectedRoot, 0o000);
+
+    await expect(collectStorageUsage(dataRoot, mediaRoot)).resolves.toMatchObject({
+      diskTotalBytes: expect.any(Number),
+      frameDataBytes: expect.any(Number),
+      mediaDataBytes: expect.any(Number),
+    });
+
+    await chmod(protectedRoot, 0o700);
   });
 });
