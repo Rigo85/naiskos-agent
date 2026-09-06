@@ -179,9 +179,12 @@ respuesta HTTP sólo es válida cuando el JSON declara `ok: true` y el estado es
 `ready` o `syncing`; los estados `unconfigured`, `storage-blocked`, `offline`
 o `error` cuentan como fallo. Tres fallos consecutivos restauran la release
 anterior y revierten, en orden inverso, sus migraciones. Repetir una migración
-ya aplicada no duplica el cambio. Las migraciones con reinicio o irreversibles
-se rechazan y pertenecen a un procedimiento separado. `--force` existe sólo
-para la aceptación administrativa fuera de la ventana nocturna.
+ya aplicada —o anterior al baseline vigente— no duplica el cambio. Un fallo
+terminal reporta una sola vez y mueve la solicitud a
+`/var/lib/naiskos/updates/failed`; el timer no la reintenta indefinidamente.
+Las migraciones con reinicio o irreversibles se rechazan y pertenecen a un
+procedimiento separado. `--force` existe sólo para la aceptación
+administrativa fuera de la ventana nocturna.
 
 La sonda del SO es independiente: `naiskos-system-update-check.timer` simula
 diariamente un `dist-upgrade`. El baseline 5 añade

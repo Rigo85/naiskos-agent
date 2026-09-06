@@ -3,6 +3,7 @@ set -eu
 
 request=/var/lib/naiskos/updates/activation-request.json
 observation=/var/lib/naiskos/updates/observation.json
+failed_root=/var/lib/naiskos/updates/failed
 public_key=/etc/naiskos/release-signing-public.pem
 baseline=/etc/naiskos/baseline.json
 helper=/opt/naiskos/bin/naiskos-release-helper.mjs
@@ -17,6 +18,16 @@ exec 9>/run/naiskos-release-activate.lock
 
 report() {
   "$helper" report "$1" "$2" "$3" "${4:-}" || true
+}
+
+quarantine_request() {
+  failure_id=${1:-invalid-request}
+  mkdir -p -- "$failed_root"
+  chmod 0700 "$failed_root"
+  failed_request="$failed_root/$failure_id-$(date -u +%Y%m%dT%H%M%SZ)-$$.json"
+  mv -f -- "$request" "$failed_request"
+  chmod 0600 "$failed_request"
+  echo "Solicitud de activación en cuarentena: $failed_request" >&2
 }
 
 restart_runtime() {
@@ -82,7 +93,10 @@ EOF
 fi
 
 [ -s "$request" ] || exit 0
-values=$($helper verify-request "$request" "$public_key" "$baseline")
+if ! values=$($helper verify-request "$request" "$public_key" "$baseline"); then
+  quarantine_request invalid-request
+  exit 1
+fi
 IFS='|' read -r campaign release manifest archive window_from window_until observe_minutes <<EOF
 $values
 EOF
@@ -100,20 +114,29 @@ fi
 
 report "$campaign" "$release" activating
 staging="/opt/naiskos/releases/.staging-$release"
+
+terminal_failure() {
+  message=$1
+  report "$campaign" "$release" failed "$message"
+  quarantine_request "$release"
+  rm -rf -- "$staging"
+  exit 1
+}
+
 rm -rf -- "$staging"
 mkdir -p -- "$staging"
 if tar -tzf "$archive" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
-  report "$campaign" "$release" failed "El archivo contiene rutas no permitidas"
-  rm -rf -- "$staging"
-  exit 1
+  terminal_failure "El archivo contiene rutas no permitidas"
 fi
 if tar -tvzf "$archive" | awk 'substr($1,1,1)=="l" || substr($1,1,1)=="h" { found=1 } END { exit found ? 0 : 1 }'; then
-  report "$campaign" "$release" failed "El archivo contiene enlaces no permitidos"
-  rm -rf -- "$staging"
-  exit 1
+  terminal_failure "El archivo contiene enlaces no permitidos"
 fi
-tar -xzf "$archive" -C "$staging" --no-same-owner --no-same-permissions
-$helper verify-extracted "$manifest" "$staging"
+if ! tar -xzf "$archive" -C "$staging" --no-same-owner --no-same-permissions; then
+  terminal_failure "No se pudo extraer el archivo de la release"
+fi
+if ! $helper verify-extracted "$manifest" "$staging"; then
+  terminal_failure "La release extraída no coincide con el manifiesto"
+fi
 
 previous=$(basename "$(readlink -f /opt/naiskos/current 2>/dev/null || true)")
 applied_migrations=
@@ -122,9 +145,7 @@ for migration in $($helper migrations "$manifest"); do
   descriptor="$migration_root/migration.json"
   if ! migration_result=$($helper apply-migration "$descriptor" "$migration_root" "$baseline" "$migration_state_root"); then
     rollback_migrations "$applied_migrations" || true
-    report "$campaign" "$release" failed "No se pudo aplicar la migración declarativa: $migration"
-    rm -rf -- "$staging"
-    exit 1
+    terminal_failure "No se pudo aplicar la migración declarativa: $migration"
   fi
   migration_status=${migration_result%%|*}
   migration_id=${migration_result#*|}
@@ -139,15 +160,13 @@ for migration in $($helper migrations "$manifest"); do
     already-current) ;;
     *)
       rollback_migrations "$applied_migrations" || true
-      report "$campaign" "$release" failed "Resultado inesperado de migración: $migration"
-      rm -rf -- "$staging"
-      exit 1
+      terminal_failure "Resultado inesperado de migración: $migration"
       ;;
   esac
 done
 
 destination="/opt/naiskos/releases/$release"
-[ ! -e "$destination" ] || { report "$campaign" "$release" failed "La versión ya existe de forma inesperada"; exit 1; }
+[ ! -e "$destination" ] || terminal_failure "La versión ya existe de forma inesperada"
 mv -- "$staging" "$destination"
 cp -- "$manifest" "$destination/release.json"
 chown -R root:root "$destination"

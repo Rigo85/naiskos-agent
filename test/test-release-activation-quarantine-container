@@ -1,0 +1,63 @@
+#!/bin/sh
+set -eu
+
+[ -f /.dockerenv ] || {
+  echo "Esta prueba sólo puede ejecutarse en un contenedor." >&2
+  exit 1
+}
+[ "$(id -u)" -eq 0 ] || {
+  echo "La prueba requiere root." >&2
+  exit 1
+}
+
+agent_root=${NAISKOS_AGENT_TEST_ROOT:-/workspace-agent}
+release=20260906-quarantine-test-001
+campaign=11111111-1111-4111-8111-111111111111
+updates=/var/lib/naiskos/updates
+archive="$updates/$release/release.tar.gz"
+manifest="$updates/$release/release.json"
+
+cleanup() {
+  rm -rf -- /etc/naiskos /opt/naiskos /var/lib/naiskos /tmp/naiskos-report-count
+}
+trap cleanup EXIT HUP INT TERM
+cleanup
+mkdir -p /etc/naiskos /opt/naiskos/bin /opt/naiskos/releases "$updates/$release"
+cp "$agent_root/deploy/naiskos-release-activate" /opt/naiskos/bin/naiskos-release-activate
+chmod 0755 /opt/naiskos/bin/naiskos-release-activate
+printf '%s\n' '{}' > /etc/naiskos/baseline.json
+printf '%s\n' 'public-key-test' > /etc/naiskos/release-signing-public.pem
+printf '%s\n' '{}' > "$manifest"
+mkdir -p /tmp/naiskos-archive-root
+printf '%s\n' 'contenido' > /tmp/naiskos-archive-root/content
+tar -C /tmp/naiskos-archive-root -czf "$archive" .
+rm -rf -- /tmp/naiskos-archive-root
+printf '%s\n' '{}' > "$updates/activation-request.json"
+
+cat > /opt/naiskos/bin/naiskos-release-helper.mjs <<EOF
+#!/bin/sh
+case "\$1" in
+  repair-migration-permissions) printf repaired ;;
+  verify-request) printf '%s\\n' '$campaign|$release|$manifest|$archive|00:00|06:00|60' ;;
+  verify-extracted) exit 0 ;;
+  migrations) printf '%s\\n' baseline-003-declarative ;;
+  apply-migration) echo 'fallo de migración simulado' >&2; exit 1 ;;
+  report) printf x >> /tmp/naiskos-report-count ;;
+  *) echo "Comando inesperado: \$1" >&2; exit 1 ;;
+esac
+EOF
+chmod 0755 /opt/naiskos/bin/naiskos-release-helper.mjs
+
+if /opt/naiskos/bin/naiskos-release-activate --force; then
+  echo "El activador aceptó una migración fallida." >&2
+  exit 1
+fi
+test ! -e "$updates/activation-request.json"
+test "$(find "$updates/failed" -maxdepth 1 -type f -name "$release-*.json" | wc -l)" -eq 1
+test "$(wc -c < /tmp/naiskos-report-count)" -eq 2
+
+# Sin solicitud activa, el siguiente disparo no debe reportar ni reintentar.
+/opt/naiskos/bin/naiskos-release-activate --force
+test "$(wc -c < /tmp/naiskos-report-count)" -eq 2
+
+echo "ok: un fallo terminal se reporta una vez y queda en cuarentena"

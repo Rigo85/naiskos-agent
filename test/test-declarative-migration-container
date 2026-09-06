@@ -69,6 +69,13 @@ done
 test "$(node "$helper" apply-migration "$fixture/migration.json" "$fixture" "$baseline" "$state_root")" = \
   "already-current|baseline-003-test"
 
+# Un paquete acumulativo puede mencionar una migración histórica. Si el
+# baseline ya es posterior, debe omitirla.
+sed -i 's/"baselineVersion": "3"/"baselineVersion": "4"/' "$baseline"
+test "$(node "$helper" apply-migration "$fixture/migration.json" "$fixture" "$baseline" "$state_root")" = \
+  "already-current|baseline-003-test"
+sed -i 's/"baselineVersion": "4"/"baselineVersion": "3"/' "$baseline"
+
 cp -R "$fixture" "$test_root/baseline-003-test"
 sed -i 's#^      "destination": ".*"#      "destination": "/tmp/no-permitido.json"#' \
   "$test_root/baseline-003-test/migration.json"
@@ -93,5 +100,12 @@ node "$helper" rollback-migration baseline-003-test "$baseline" "$state_root" >/
 grep -q '"baselineVersion": "2"' "$baseline"
 test ! -e /etc/naiskos/baseline.d/0003-test.json
 test "$(stat -c %a "$baseline")" = "640"
+
+# Un baseline provisionado desde cero puede no conservar el estado individual
+# de migraciones anteriores; la versión global sigue siendo autoritativa.
+sed -i 's/"baselineVersion": "2"/"baselineVersion": "4"/' "$baseline"
+rm -rf -- "$state_root/baseline-003-test"
+test "$(node "$helper" apply-migration "$fixture/migration.json" "$fixture" "$baseline" "$state_root")" = \
+  "already-current|baseline-003-test"
 
 echo "ok: migración declarativa aplicable, idempotente y reversible"

@@ -209,8 +209,8 @@ async function applyMigration(descriptorFile, migrationRoot, baselineFile, state
   const stateFile = path.join(migrationStateRoot, "state.json");
   const existingState = await readJsonIfPresent(stateFile);
 
-  if (String(baseline.baselineVersion) === descriptor.toVersion) {
-    if (existingState?.status === "applied" || !existingState) return "already-current";
+  if (Number(baseline.baselineVersion) >= Number(descriptor.toVersion)) {
+    return "already-current";
   }
   if (existingState?.status === "applying") {
     await rollbackMigration(descriptor.migrationId, baselineFile, stateRoot);
