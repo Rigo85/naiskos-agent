@@ -1,0 +1,15 @@
+[Unit]
+Description=Instala actualizaciones de seguridad del SO durante la ventana nocturna
+After=network-online.target naiskos-agent.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/naiskos/bin/naiskos-system-maintenance security
+TimeoutStartSec=3h
+Nice=10
+IOSchedulingClass=idle
+UMask=0077
+ProtectHome=true
+PrivateTmp=true
+

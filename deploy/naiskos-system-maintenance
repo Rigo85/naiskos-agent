@@ -1,0 +1,126 @@
+#!/bin/sh
+set -eu
+
+mode=${1:-}
+case "$mode" in
+  security|general) ;;
+  *) echo "Modo inválido" >&2; exit 2 ;;
+esac
+
+preflight=false
+if [ "${2:-}" = "--preflight" ]; then preflight=true; fi
+
+pending_count() {
+  simulation=$(apt-get -s -o Debug::NoLocking=1 dist-upgrade 2>/dev/null) || return 1
+  printf '%s\n' "$simulation" | awk '/^Inst / { count++ } END { print count+0 }'
+}
+
+if [ "$preflight" = true ]; then
+  for command in apt-get awk curl dpkg flock systemctl; do
+    command -v "$command" >/dev/null 2>&1 || {
+      echo "Falta el comando requerido: $command" >&2
+      exit 1
+    }
+  done
+  count=$(pending_count)
+  echo "preflight=ok mode=$mode pending=$count unattended=$([ -x /usr/bin/unattended-upgrade ] && echo present || echo bootstrap-required)"
+  exit 0
+fi
+
+case "$(date +%H)" in
+  00|01|02|03|04|05) ;;
+  *) echo "Fuera de la ventana nocturna; no se modifica el sistema"; exit 0 ;;
+esac
+
+# El primer domingo, la campaña general ya incluye los parches de seguridad.
+if [ "$mode" = security ] && [ "$(date +%u)" = 7 ] && [ "$(date +%d)" -le 7 ]; then
+  echo "La actualización de seguridad se integra en la campaña general mensual"
+  exit 0
+fi
+
+helper=/opt/naiskos/bin/naiskos-release-helper.mjs
+campaign=
+if [ "$mode" = general ]; then
+  campaign=$($helper system-permit)
+  [ -n "$campaign" ] || exit 0
+fi
+
+state_root=/var/lib/naiskos/system-maintenance
+mkdir -p "$state_root"
+chmod 0700 "$state_root"
+marker="$state_root/${campaign:-security-$(date +%F)}.completed"
+[ ! -e "$marker" ] || exit 0
+
+report() {
+  report_status=$1
+  report_packages=$2
+  report_pending=$3
+  report_reboot=$4
+  report_error=${5:-}
+  attempt=1
+  while [ "$attempt" -le 3 ]; do
+    if $helper report-maintenance "$mode" "$report_status" "$report_packages" \
+      "$report_pending" "$report_reboot" "$campaign" "$report_error"; then
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    sleep 2
+  done
+  return 1
+}
+
+fail() {
+  message=$1
+  echo "$message" >&2
+  report failed 0 "${before:-0}" false "$message" || true
+  exit 1
+}
+
+exec 9>/run/naiskos-system-maintenance.lock
+flock -n 9 || { echo "Ya existe otro mantenimiento del sistema"; exit 0; }
+
+report running 0 0 false || fail "No se pudo registrar el inicio del mantenimiento"
+
+apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=900 update ||
+  fail "Falló la actualización de índices APT"
+before=$(pending_count) || fail "No se pudo calcular el estado de paquetes antes de actualizar"
+
+if [ "$mode" = security ]; then
+  if ! command -v unattended-upgrade >/dev/null 2>&1; then
+    DEBIAN_FRONTEND=noninteractive apt-get -y --no-install-recommends \
+      -o Acquire::Retries=3 -o DPkg::Lock::Timeout=900 install unattended-upgrades ||
+      fail "No se pudo instalar el actualizador de seguridad"
+  fi
+  unattended-upgrade --verbose || fail "Falló la actualización de seguridad"
+else
+  DEBIAN_FRONTEND=noninteractive apt-get -y \
+    -o Acquire::Retries=3 -o DPkg::Lock::Timeout=900 \
+    -o Dpkg::Options::=--force-confold full-upgrade ||
+    fail "Falló la actualización general del sistema"
+fi
+
+dpkg --audit | grep -q . && fail "dpkg informó paquetes incompletos después de actualizar"
+systemctl is-active --quiet naiskos-agent.service || fail "El agente no quedó activo"
+curl -fsS http://127.0.0.1:8080/api/v1/health | grep -q '"ok":true' ||
+  fail "La salud local no respondió después de actualizar"
+
+after=$(pending_count) || fail "No se pudo calcular el estado de paquetes después de actualizar"
+if [ "$before" -gt "$after" ]; then changed=$((before - after)); else changed=0; fi
+reboot=false
+if [ -e /var/run/reboot-required ] || { [ "$mode" = general ] && [ "$changed" -gt 0 ]; }; then
+  reboot=true
+fi
+
+report succeeded "$changed" "$after" "$reboot" || {
+  echo "La actualización terminó pero no pudo registrar su resultado; se reintentará" >&2
+  exit 1
+}
+printf '%s\n' "$(date -Iseconds) mode=$mode campaign=${campaign:-none} packages=$changed reboot=$reboot" >"$marker"
+chmod 0600 "$marker"
+
+if [ "$reboot" = true ]; then
+  # El endpoint local encola el evento de manera durable; este margen permite
+  # entregarlo al central antes del reinicio sin depender de ello para conservarlo.
+  sleep 15
+  systemctl reboot
+fi

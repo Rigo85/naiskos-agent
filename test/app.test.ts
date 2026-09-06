@@ -254,6 +254,53 @@ describe("agente HTTP", () => {
     await app.close();
   });
 
+  it("acepta sólo resultados restringidos del mantenimiento del SO", async () => {
+    const { app, engine } = await fixture();
+    const forbidden = await app.inject({
+      method: "POST",
+      url: "/api/v1/system/maintenance-events",
+      payload: { mode: "security", status: "succeeded", packagesChanged: 2, packagesPending: 0 },
+    });
+    expect(forbidden.statusCode).toBe(403);
+
+    const invalid = await app.inject({
+      method: "POST",
+      url: "/api/v1/system/maintenance-events",
+      headers: { "x-naiskos-request": "system-maintenance" },
+      payload: { mode: "general", status: "succeeded", packagesChanged: 2, packagesPending: 0 },
+    });
+    expect(invalid.statusCode).toBe(400);
+
+    const campaignId = "d210a8b6-1a17-4759-af25-2cf1fca0c059";
+    const accepted = await app.inject({
+      method: "POST",
+      url: "/api/v1/system/maintenance-events",
+      headers: { "x-naiskos-request": "system-maintenance" },
+      payload: {
+        mode: "general",
+        status: "succeeded",
+        packagesChanged: 7,
+        packagesPending: 1,
+        rebootRequired: true,
+        campaignId,
+      },
+    });
+    expect(accepted.statusCode).toBe(202);
+    const outbox = JSON.parse(
+      await readFile(path.join(engine.manifestFile, "..", "outbox.json"), "utf8"),
+    ) as Array<Record<string, unknown>>;
+    expect(outbox[0]).toMatchObject({
+      type: "system.maintenance.status",
+      mode: "general",
+      status: "succeeded",
+      packagesChanged: 7,
+      packagesPending: 1,
+      rebootRequired: true,
+      campaignId,
+    });
+    await app.close();
+  });
+
   it("encola rotación y eliminación sin modificar anticipadamente el manifiesto", async () => {
     const { app, engine } = await fixture();
     const mediaId = "b210a8b6-1a17-4759-af25-2cf1fca0c057";

@@ -1,0 +1,16 @@
+[Unit]
+Description=Ejecuta una campaña general escalonada del SO
+After=network-online.target naiskos-agent.service naiskos-security-update.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/naiskos/agent.env
+ExecStart=/opt/naiskos/bin/naiskos-system-maintenance general
+TimeoutStartSec=3h
+Nice=10
+IOSchedulingClass=idle
+UMask=0077
+ProtectHome=true
+PrivateTmp=true
+

@@ -136,6 +136,68 @@ if (command === "verify-request") {
     signal: AbortSignal.timeout(10_000),
   });
   if (!response.ok) fail(`Reporte HTTP ${response.status}`);
+} else if (command === "system-permit") {
+  const centralUrl = String(process.env.NAISKOS_CENTRAL_URL ?? "").replace(/\/$/, "");
+  const frameId = String(process.env.NAISKOS_FRAME_ID ?? "");
+  const token = String(process.env.NAISKOS_AGENT_TOKEN ?? "");
+  if (!centralUrl.startsWith("https://") || !uuidPattern(frameId) || token.length < 32) {
+    fail("Configuración central inválida");
+  }
+  let response;
+  let lastError;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      response = await fetch(
+        `${centralUrl}/api/v1/frames/${encodeURIComponent(frameId)}/system-maintenance`,
+        {
+          headers: { authorization: `Bearer ${token}` },
+          signal: AbortSignal.timeout(20_000),
+        },
+      );
+      if (response.status < 500) break;
+      lastError = new Error(`Permiso HTTP ${response.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 1_000 * (attempt + 1)));
+  }
+  if (!response) throw lastError ?? new Error("No se pudo consultar el permiso");
+  if (response.status === 204) process.exit(0);
+  if (!response.ok) fail(`Permiso HTTP ${response.status}`);
+  const permit = await response.json();
+  if (
+    permit?.mode !== "general" || !uuidPattern(String(permit?.campaignId ?? "")) ||
+    !/^[0-9]{4}-[0-9]{2}$/.test(String(permit?.period ?? "")) ||
+    permit?.timezone !== "America/Lima" || permit?.maintenanceWindow?.from !== "00:00" ||
+    permit?.maintenanceWindow?.until !== "06:00"
+  ) fail("Permiso de mantenimiento inválido");
+  process.stdout.write(String(permit.campaignId));
+} else if (command === "report-maintenance") {
+  const [mode, status, packagesRaw, pendingRaw, rebootRaw, campaignId = "", error = ""] = args;
+  const packagesChanged = Number(packagesRaw);
+  const packagesPending = Number(pendingRaw);
+  if (
+    !["security", "general"].includes(mode) ||
+    !["running", "succeeded", "failed"].includes(status) ||
+    !Number.isSafeInteger(packagesChanged) || packagesChanged < 0 || packagesChanged > 10000 ||
+    !Number.isSafeInteger(packagesPending) || packagesPending < 0 || packagesPending > 10000 ||
+    (mode === "general" && !uuidPattern(campaignId))
+  ) fail("Reporte de mantenimiento inválido");
+  const response = await fetch("http://127.0.0.1:8080/api/v1/system/maintenance-events", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-naiskos-request": "system-maintenance" },
+    body: JSON.stringify({
+      mode,
+      status,
+      packagesChanged,
+      packagesPending,
+      rebootRequired: rebootRaw === "true",
+      ...(campaignId ? { campaignId } : {}),
+      ...(error ? { error: error.slice(0, 1_000) } : {}),
+    }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) fail(`Reporte HTTP ${response.status}`);
 } else {
   fail("Comando desconocido");
 }

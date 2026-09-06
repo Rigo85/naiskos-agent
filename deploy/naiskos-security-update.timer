@@ -1,0 +1,12 @@
+[Unit]
+Description=Programa parches de seguridad diarios de Naiskos
+
+[Timer]
+OnCalendar=*-*-* 00:10:00
+AccuracySec=1min
+RandomizedDelaySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+

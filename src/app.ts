@@ -232,6 +232,50 @@ export async function buildApp(
     void engine.sync().catch(() => undefined);
     return reply.code(202).send({ accepted: true, id });
   });
+  app.post<{
+    Body: {
+      mode?: string;
+      status?: string;
+      packagesChanged?: number;
+      packagesPending?: number;
+      rebootRequired?: boolean;
+      campaignId?: string;
+      error?: string;
+    };
+  }>("/api/v1/system/maintenance-events", async (request, reply) => {
+    if (request.headers["x-naiskos-request"] !== "system-maintenance") {
+      return reply.code(403).send({ error: "Solicitud local inválida" });
+    }
+    const mode = request.body?.mode;
+    const status = request.body?.status;
+    const packagesChanged = Number(request.body?.packagesChanged);
+    const packagesPending = Number(request.body?.packagesPending);
+    const campaignId = request.body?.campaignId;
+    if (
+      (mode !== "security" && mode !== "general") ||
+      !["running", "succeeded", "failed"].includes(String(status)) ||
+      !Number.isSafeInteger(packagesChanged) || packagesChanged < 0 || packagesChanged > 10_000 ||
+      !Number.isSafeInteger(packagesPending) || packagesPending < 0 || packagesPending > 10_000 ||
+      (mode === "general" && (typeof campaignId !== "string" || !isUuid(campaignId)))
+    ) {
+      return reply.code(400).send({ error: "Evento de mantenimiento inválido" });
+    }
+    const id = await engine.enqueueEvent({
+      type: "system.maintenance.status",
+      at: new Date().toISOString(),
+      mode,
+      status,
+      packagesChanged,
+      packagesPending,
+      rebootRequired: request.body?.rebootRequired === true,
+      ...(campaignId ? { campaignId } : {}),
+      ...(typeof request.body?.error === "string"
+        ? { error: request.body.error.slice(0, 1_000) }
+        : {}),
+    });
+    void engine.sync().catch(() => undefined);
+    return reply.code(202).send({ accepted: true, id });
+  });
   app.get("/api/v1/manifest", async (_request, reply) => {
     reply.header("etag", `"${engine.currentManifest().version}"`);
     return engine.currentManifest();
@@ -475,6 +519,12 @@ function mediaType(extension: string): string {
       ".mp4": "video/mp4",
       ".webm": "video/webm",
     }[extension.toLowerCase()] ?? "application/octet-stream"
+  );
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value,
   );
 }
 
