@@ -24,6 +24,11 @@ central sin interrumpir la presentación.
 El navegador nunca se conecta directamente al servidor central ni recibe sus
 credenciales.
 
+El mantenimiento del SO también queda separado del navegador. El baseline 5
+instala helpers root de propósito fijo: seguridad diaria y campaña general. El
+agente sólo recibe su resultado local, lo persiste en el outbox y lo entrega al
+central; no ejecuta APT ni acepta comandos remotos.
+
 ## Requisitos
 
 - Node.js 24 y npm 11.
@@ -115,6 +120,10 @@ La interfaz principal está bajo `/api/v1`:
 - sincronización manual en `/sync`;
 - salida o apagado en `/system/actions`.
 
+`POST /system/maintenance-events` es exclusivamente interno y acepta el
+contrato cerrado usado por el helper del baseline. No debe exponerse mediante
+proxy ni usarse como API de administración.
+
 El contenido multimedia se sirve mediante `/media/:filename` con soporte para
 peticiones `Range`. El agente escucha sólo en loopback y no debe exponerse con
 un proxy público.
@@ -174,8 +183,14 @@ ya aplicada no duplica el cambio. Las migraciones con reinicio o irreversibles
 se rechazan y pertenecen a un procedimiento separado. `--force` existe sólo
 para la aceptación administrativa fuera de la ventana nocturna.
 
-La consulta del SO es independiente: `naiskos-system-update-check.timer`
-simula diariamente un `dist-upgrade`, pero no instala ni reinicia.
+La sonda del SO es independiente: `naiskos-system-update-check.timer` simula
+diariamente un `dist-upgrade`. El baseline 5 añade
+`naiskos-security-update.timer` y `naiskos-general-update.timer`; ambos llaman
+un ejecutable fijo sólo entre 00:00 y 06:00. Seguridad usa
+`unattended-upgrade`; la campaña general exige un permiso autenticado del
+central, ejecuta `full-upgrade`, comprueba salud y reporta paquetes cambiados,
+pendientes y reinicio requerido. Los reintentos no sustituyen el outbox
+durable.
 
 ## Seguridad y operación
 
