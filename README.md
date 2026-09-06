@@ -238,3 +238,9 @@ medios, fotografías, videos, miniaturas, capturas ni actividad de personas.
 El historial técnico del piloto está en
 [`docs/piloto-rpi-2026-08-29.md`](docs/piloto-rpi-2026-08-29.md); no sustituye la
 validación del hardware concreto donde vaya a instalarse.
+
+## Licencia
+
+Naiskos Agent se distribuye bajo la
+[GNU Affero General Public License v3.0](LICENSE), exclusivamente en su versión
+3 (`AGPL-3.0-only`).

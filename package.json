@@ -1,6 +1,7 @@
 {
   "name": "naiskos-agent",
   "version": "0.1.0",
+  "license": "AGPL-3.0-only",
   "private": true,
   "description": "Agente local de Naiskos para Raspberry Pi",
   "type": "module",
