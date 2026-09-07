@@ -8,13 +8,12 @@ public_key=/etc/naiskos/release-signing-public.pem
 baseline=/etc/naiskos/baseline.json
 helper=/opt/naiskos/bin/naiskos-release-helper.mjs
 migration_state_root=/var/lib/naiskos/migrations
+credentials=/var/lib/naiskos/device-credentials.json
 force=0
 [ "${1:-}" = "--force" ] && force=1
 
 exec 9>/run/naiskos-release-activate.lock
 /usr/bin/flock --nonblock 9 || exit 0
-
-"$helper" repair-migration-permissions "$migration_state_root"
 
 report() {
   "$helper" report "$1" "$2" "$3" "${4:-}" || true
@@ -56,6 +55,7 @@ rollback_migrations() {
 }
 
 if [ -s "$observation" ]; then
+  "$helper" repair-migration-permissions "$migration_state_root" >/dev/null
   values=$(/opt/node24/bin/node -e '
     const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
     process.stdout.write([s.campaignId,s.releaseId,s.previous,s.activatedAt,s.observeMinutes,s.failures||0,(s.migrations||[]).join(",")].join("|"));
@@ -97,9 +97,17 @@ if ! values=$($helper verify-request "$request" "$public_key" "$baseline"); then
   quarantine_request invalid-request
   exit 1
 fi
-IFS='|' read -r campaign release manifest archive window_from window_until observe_minutes <<EOF
+IFS='|' read -r campaign release manifest archive window_from window_until observe_minutes expires_at <<EOF
 $values
 EOF
+
+expires_epoch=$(date -d "$expires_at" +%s)
+now_epoch=$(date +%s)
+if [ "$now_epoch" -ge "$expires_epoch" ]; then
+  report "$campaign" "$release" failed "La autorización local de la release venció"
+  quarantine_request "$release-expired"
+  exit 1
+fi
 
 if [ "$force" -ne 1 ]; then
   now=$(TZ=America/Lima date +%H%M)
@@ -111,6 +119,22 @@ if [ "$force" -ne 1 ]; then
     [ "$now" -ge "$from" ] || [ "$now" -lt "$until" ] || exit 0
   fi
 fi
+
+if authorization=$($helper authorize-release "$campaign" "$release" "$expires_at" "$credentials"); then
+  :
+else
+  authorization_status=$?
+  if [ "$authorization_status" -eq 3 ]; then
+    report "$campaign" "$release" failed "La campaña ya no autoriza esta activación"
+    quarantine_request "$release-not-authorized"
+    exit 1
+  fi
+  echo "No se pudo revalidar la campaña; la activación queda pendiente" >&2
+  exit 0
+fi
+[ "$authorization" = "authorized" ] || exit 1
+
+"$helper" repair-migration-permissions "$migration_state_root" >/dev/null
 
 report "$campaign" "$release" activating
 staging="/opt/naiskos/releases/.staging-$release"

@@ -4,6 +4,7 @@ After=network-online.target
 
 [Service]
 Type=oneshot
+EnvironmentFile=/etc/naiskos/agent.env
 ExecStart=/opt/naiskos/bin/naiskos-release-activate
 Nice=10
 IOSchedulingClass=best-effort

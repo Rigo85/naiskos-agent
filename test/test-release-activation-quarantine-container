@@ -18,7 +18,8 @@ archive="$updates/$release/release.tar.gz"
 manifest="$updates/$release/release.json"
 
 cleanup() {
-  rm -rf -- /etc/naiskos /opt/naiskos /var/lib/naiskos /tmp/naiskos-report-count
+  rm -rf -- /etc/naiskos /opt/naiskos /var/lib/naiskos \
+    /tmp/naiskos-report-count /tmp/naiskos-expired-mode /tmp/naiskos-unauthorized-mode
 }
 trap cleanup EXIT HUP INT TERM
 cleanup
@@ -38,7 +39,17 @@ cat > /opt/naiskos/bin/naiskos-release-helper.mjs <<EOF
 #!/bin/sh
 case "\$1" in
   repair-migration-permissions) printf repaired ;;
-  verify-request) printf '%s\\n' '$campaign|$release|$manifest|$archive|00:00|06:00|60' ;;
+  verify-request)
+    if [ -e /tmp/naiskos-expired-mode ]; then
+      printf '%s\\n' '$campaign|$release|$manifest|$archive|00:00|06:00|60|2020-01-01T00:00:00.000Z'
+    else
+      printf '%s\\n' '$campaign|$release|$manifest|$archive|00:00|06:00|60|2099-01-01T00:00:00.000Z'
+    fi
+    ;;
+  authorize-release)
+    [ ! -e /tmp/naiskos-unauthorized-mode ] || exit 3
+    printf authorized
+    ;;
   verify-extracted) exit 0 ;;
   migrations) printf '%s\\n' baseline-003-declarative ;;
   apply-migration) echo 'fallo de migración simulado' >&2; exit 1 ;;
@@ -56,8 +67,29 @@ test ! -e "$updates/activation-request.json"
 test "$(find "$updates/failed" -maxdepth 1 -type f -name "$release-*.json" | wc -l)" -eq 1
 test "$(wc -c < /tmp/naiskos-report-count)" -eq 2
 
-# Sin solicitud activa, el siguiente disparo no debe reportar ni reintentar.
-/opt/naiskos/bin/naiskos-release-activate --force
+# Sin solicitud activa, el siguiente disparo no debe reportar, reparar ni escribir salida.
+idle_output=$(/opt/naiskos/bin/naiskos-release-activate --force)
+test -z "$idle_output"
 test "$(wc -c < /tmp/naiskos-report-count)" -eq 2
 
-echo "ok: un fallo terminal se reporta una vez y queda en cuarentena"
+touch /tmp/naiskos-expired-mode
+printf '%s\n' '{}' > "$updates/activation-request.json"
+if /opt/naiskos/bin/naiskos-release-activate --force; then
+  echo "El activador aceptó una autorización vencida." >&2
+  exit 1
+fi
+test ! -e "$updates/activation-request.json"
+test "$(wc -c < /tmp/naiskos-report-count)" -eq 3
+
+rm -- /tmp/naiskos-expired-mode
+touch /tmp/naiskos-unauthorized-mode
+printf '%s\n' '{}' > "$updates/activation-request.json"
+if /opt/naiskos/bin/naiskos-release-activate --force; then
+  echo "El activador aceptó una campaña que la central ya no autoriza." >&2
+  exit 1
+fi
+test ! -e "$updates/activation-request.json"
+test "$(wc -c < /tmp/naiskos-report-count)" -eq 4
+test "$(find "$updates/failed" -maxdepth 1 -type f -name "$release-*.json" | wc -l)" -eq 3
+
+echo "ok: fallos terminales, vencimiento y cancelación quedan en cuarentena una vez"

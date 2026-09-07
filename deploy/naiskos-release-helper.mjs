@@ -57,10 +57,33 @@ if (command === "verify-request") {
   if (!timePattern(from) || !timePattern(until)) fail("Ventana inválida");
   const observe = Number(request.observeMinutes);
   if (!Number.isInteger(observe) || observe < 1 || observe > 10080) fail("Observación inválida");
+  const expiresAt = String(request.expiresAt ?? "");
+  if (!Number.isFinite(Date.parse(expiresAt))) fail("Vencimiento inválido");
   process.stdout.write([
     campaignId, releaseId, request.manifestFile, request.archiveFile,
-    from, until, String(observe),
+    from, until, String(observe), expiresAt,
   ].join("|"));
+} else if (command === "authorize-release") {
+  const [campaignId, releaseId, expectedExpiry, credentialsFile] = args.map(required);
+  if (
+    !uuidPattern(campaignId) || !releaseIdPattern(releaseId) ||
+    !Number.isFinite(Date.parse(expectedExpiry)) || Date.parse(expectedExpiry) <= Date.now()
+  ) fail("Autorización local inválida");
+  const { centralUrl, frameId, token } = await centralCredentials(credentialsFile);
+  const response = await centralGet(
+    `${centralUrl}/api/v1/frames/${encodeURIComponent(frameId)}/software`,
+    token,
+  );
+  if (response.status === 204) process.exit(3);
+  if (!response.ok) fail(`Autorización HTTP ${response.status}`);
+  const assignment = await response.json();
+  if (
+    assignment?.campaignId !== campaignId || assignment?.releaseId !== releaseId ||
+    assignment?.expiresAt !== expectedExpiry ||
+    !Number.isFinite(Date.parse(String(assignment?.expiresAt ?? ""))) ||
+    Date.parse(assignment.expiresAt) <= Date.now()
+  ) process.exit(3);
+  process.stdout.write("authorized");
 } else if (command === "verify-extracted") {
   const [manifestFile, releaseRoot] = args.map(required);
   const manifest = JSON.parse(await readFile(manifestFile, "utf8"));
@@ -137,31 +160,11 @@ if (command === "verify-request") {
   });
   if (!response.ok) fail(`Reporte HTTP ${response.status}`);
 } else if (command === "system-permit") {
-  const centralUrl = String(process.env.NAISKOS_CENTRAL_URL ?? "").replace(/\/$/, "");
-  const frameId = String(process.env.NAISKOS_FRAME_ID ?? "");
-  const token = String(process.env.NAISKOS_AGENT_TOKEN ?? "");
-  if (!centralUrl.startsWith("https://") || !uuidPattern(frameId) || token.length < 32) {
-    fail("Configuración central inválida");
-  }
-  let response;
-  let lastError;
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    try {
-      response = await fetch(
-        `${centralUrl}/api/v1/frames/${encodeURIComponent(frameId)}/system-maintenance`,
-        {
-          headers: { authorization: `Bearer ${token}` },
-          signal: AbortSignal.timeout(20_000),
-        },
-      );
-      if (response.status < 500) break;
-      lastError = new Error(`Permiso HTTP ${response.status}`);
-    } catch (error) {
-      lastError = error;
-    }
-    if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 1_000 * (attempt + 1)));
-  }
-  if (!response) throw lastError ?? new Error("No se pudo consultar el permiso");
+  const { centralUrl, frameId, token } = await centralCredentials();
+  const response = await centralGet(
+    `${centralUrl}/api/v1/frames/${encodeURIComponent(frameId)}/system-maintenance`,
+    token,
+  );
   if (response.status === 204) process.exit(0);
   if (!response.ok) fail(`Permiso HTTP ${response.status}`);
   const permit = await response.json();
@@ -200,6 +203,41 @@ if (command === "verify-request") {
   if (!response.ok) fail(`Reporte HTTP ${response.status}`);
 } else {
   fail("Comando desconocido");
+}
+
+async function centralCredentials(explicitFile) {
+  const dataRoot = path.resolve(process.env.NAISKOS_DATA_ROOT ?? "/var/lib/naiskos");
+  const credentialsFile = explicitFile || path.join(dataRoot, "device-credentials.json");
+  const stored = await readJsonIfPresent(credentialsFile);
+  const centralUrl = String(process.env.NAISKOS_CENTRAL_URL ?? "").replace(/\/$/, "");
+  const frameId = String(process.env.NAISKOS_FRAME_ID ?? stored?.frameId ?? "");
+  const token = String(process.env.NAISKOS_AGENT_TOKEN ?? stored?.agentToken ?? "");
+  if (!centralUrl.startsWith("https://") || !uuidPattern(frameId) || token.length < 32) {
+    fail("Configuración central inválida");
+  }
+  return { centralUrl, frameId, token };
+}
+
+async function centralGet(url, token) {
+  let response;
+  let lastError;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      response = await fetch(url, {
+        headers: { authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (response.status < 500) return response;
+      lastError = new Error(`Central respondió HTTP ${response.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt < 3) {
+      await new Promise((resolve) => setTimeout(resolve, 1_000 * (attempt + 1)));
+    }
+  }
+  if (response) return response;
+  throw lastError ?? new Error("No se pudo consultar la central");
 }
 
 async function applyMigration(descriptorFile, migrationRoot, baselineFile, stateRoot) {

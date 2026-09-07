@@ -13,6 +13,7 @@ interface SoftwareAssignment {
   releaseId: string;
   maintenanceWindow: { from: string; until: string };
   observeMinutes: number;
+  expiresAt: string;
   archiveSizeBytes: number;
   archiveSha256: string;
   manifestUrl: string;
@@ -47,6 +48,8 @@ export class SoftwareUpdateManager {
     if (!frameId || !centralUrl || !token) return "unconfigured";
     this.running = true;
     let assignment: SoftwareAssignment | null = null;
+    const updateRoot = path.join(this.config.dataRoot, "updates");
+    const requestFile = path.join(updateRoot, "activation-request.json");
     try {
       const response = await fetch(
         `${centralUrl}/api/v1/frames/${encodeURIComponent(frameId)}/software`,
@@ -55,18 +58,34 @@ export class SoftwareUpdateManager {
           signal: AbortSignal.timeout(20_000),
         },
       );
-      if (response.status === 204) return "none";
+      if (response.status === 204) {
+        await this.discardPendingRequest(requestFile, updateRoot);
+        return "none";
+      }
       if (!response.ok) throw new Error(`Central respondió HTTP ${response.status}`);
       assignment = validateAssignment(await response.json());
-      const updateRoot = path.join(this.config.dataRoot, "updates");
       const releaseRoot = path.join(updateRoot, assignment.releaseId);
-      const requestFile = path.join(updateRoot, "activation-request.json");
+      let current: {
+        campaignId?: string;
+        releaseId?: string;
+        expiresAt?: string;
+      } | null = null;
       try {
-        const current = JSON.parse(await readFile(requestFile, "utf8")) as { releaseId?: string };
-        if (current.releaseId === assignment.releaseId) return "staged";
+        current = JSON.parse(await readFile(requestFile, "utf8")) as {
+          campaignId?: string;
+          releaseId?: string;
+          expiresAt?: string;
+        };
       } catch {
         // No hay una activación ya preparada para esta versión.
       }
+      if (
+        current?.campaignId === assignment.campaignId &&
+        current.releaseId === assignment.releaseId &&
+        current.expiresAt === assignment.expiresAt &&
+        Date.parse(current.expiresAt) > Date.now()
+      ) return "staged";
+      if (current) await this.discardPendingRequest(requestFile, updateRoot);
       await mkdir(releaseRoot, { recursive: true, mode: 0o750 });
       await this.emitStatus(assignment, "downloading");
       const manifestFile = path.join(releaseRoot, "release.json");
@@ -99,6 +118,7 @@ export class SoftwareUpdateManager {
         stagedAt: new Date().toISOString(),
         maintenanceWindow: assignment.maintenanceWindow,
         observeMinutes: assignment.observeMinutes,
+        expiresAt: assignment.expiresAt,
         manifestFile,
         signatureFile,
         archiveFile,
@@ -119,6 +139,22 @@ export class SoftwareUpdateManager {
       throw error;
     } finally {
       this.running = false;
+    }
+  }
+
+  private async discardPendingRequest(requestFile: string, updateRoot: string): Promise<void> {
+    let releaseId: string | null = null;
+    try {
+      const current = JSON.parse(await readFile(requestFile, "utf8")) as { releaseId?: string };
+      if (/^[0-9]{8}[A-Za-z0-9._-]{1,80}$/.test(String(current.releaseId ?? ""))) {
+        releaseId = String(current.releaseId);
+      }
+    } catch {
+      // Una solicitud inexistente o ilegible se elimina sin inferir rutas.
+    }
+    await rm(requestFile, { force: true });
+    if (releaseId) {
+      await rm(path.join(updateRoot, releaseId), { recursive: true, force: true });
     }
   }
 
@@ -181,7 +217,10 @@ function validateAssignment(value: unknown): SoftwareAssignment {
     !assignment.maintenanceWindow ||
     typeof assignment.manifestUrl !== "string" ||
     typeof assignment.signatureUrl !== "string" ||
-    typeof assignment.archiveUrl !== "string"
+    typeof assignment.archiveUrl !== "string" ||
+    typeof assignment.expiresAt !== "string" ||
+    !Number.isFinite(Date.parse(assignment.expiresAt)) ||
+    Date.parse(assignment.expiresAt) <= Date.now()
   ) throw new Error("Asignación de software inválida");
   return assignment as SoftwareAssignment;
 }

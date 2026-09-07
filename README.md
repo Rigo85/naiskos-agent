@@ -182,6 +182,12 @@ anterior y revierten, en orden inverso, sus migraciones. Repetir una migración
 ya aplicada —o anterior al baseline vigente— no duplica el cambio. Un fallo
 terminal reporta una sola vez y mueve la solicitud a
 `/var/lib/naiskos/updates/failed`; el timer no la reintenta indefinidamente.
+Cada solicitud lleva el vencimiento de su campaña y se revalida contra la
+central inmediatamente antes de activar. Si la campaña fue cancelada o venció,
+el agente retira la preparación local; si la central no responde, conserva la
+release sin instalarla hasta poder comprobarla o alcanzar el vencimiento. Sin
+solicitud ni observación activa, el timer sale sin tocar permisos ni escribir
+en el journal.
 Las migraciones con reinicio o irreversibles se rechazan y pertenecen a un
 procedimiento separado. `--force` existe sólo para la aceptación
 administrativa fuera de la ventana nocturna.
