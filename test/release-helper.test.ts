@@ -55,3 +55,17 @@ describe("credenciales del helper privilegiado", () => {
     })).rejects.toThrow(/no coinciden/);
   });
 });
+
+describe("cola durable de mantenimiento", () => {
+  it("inicializa la cola antes de ejecutar el comando de vaciado", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "naiskos-maintenance-"));
+    temporaryDirectories.push(root);
+
+    await expect(execute(process.execPath, [helper, "flush-maintenance-reports"], {
+      env: {
+        ...process.env,
+        NAISKOS_DATA_ROOT: root,
+      },
+    })).resolves.toBeDefined();
+  });
+});

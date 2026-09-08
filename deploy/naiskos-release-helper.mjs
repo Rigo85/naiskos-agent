@@ -24,6 +24,9 @@ import { promisify } from "node:util";
 
 const execFile = promisify(execFileCallback);
 const [command, ...args] = process.argv.slice(2);
+const dataRoot = path.resolve(process.env.NAISKOS_DATA_ROOT ?? "/var/lib/naiskos");
+const maintenanceRoot = path.join(dataRoot, "system-maintenance");
+const maintenanceOutbox = path.join(maintenanceRoot, "outbox");
 
 if (command === "verify-request") {
   const [requestFile, publicKeyFile, baselineFile] = args;
@@ -235,10 +238,9 @@ if (command === "verify-request") {
     !Number.isSafeInteger(packagesPending) || packagesPending < 0 || packagesPending > 10000 ||
     (errorCode && !/^[a-z0-9][a-z0-9._-]{0,79}$/.test(errorCode))
   ) fail("Estado de mantenimiento inválido");
-  const root = "/var/lib/naiskos/system-maintenance";
-  await mkdir(root, { recursive: true, mode: 0o700 });
-  await chmod(root, 0o700);
-  const file = path.join(root, `${attemptId}.json`);
+  await mkdir(maintenanceRoot, { recursive: true, mode: 0o700 });
+  await chmod(maintenanceRoot, 0o700);
+  const file = path.join(maintenanceRoot, `${attemptId}.json`);
   const previous = await readJsonIfPresent(file);
   const bootId = (await readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim();
   await writeJsonAtomic(file, {
@@ -258,13 +260,12 @@ if (command === "verify-request") {
     ...(error ? { error: error.slice(0, 1_000) } : {}),
   }, 0o600);
 } else if (command === "pending-maintenance") {
-  const root = "/var/lib/naiskos/system-maintenance";
-  await mkdir(root, { recursive: true, mode: 0o700 });
-  const entries = (await readdir(root, { withFileTypes: true }))
+  await mkdir(maintenanceRoot, { recursive: true, mode: 0o700 });
+  const entries = (await readdir(maintenanceRoot, { withFileTypes: true }))
     .filter((entry) => entry.isFile() && uuidPattern(entry.name.replace(/\.json$/, "")))
     .sort((left, right) => left.name.localeCompare(right.name));
   for (const entry of entries) {
-    const state = await readJsonIfPresent(path.join(root, entry.name));
+    const state = await readJsonIfPresent(path.join(maintenanceRoot, entry.name));
     if (!state || !["reboot_pending", "verifying"].includes(state.phase)) continue;
     if (
       !uuidPattern(String(state.attemptId ?? "")) ||
@@ -286,7 +287,6 @@ if (command === "verify-request") {
 }
 
 async function centralCredentials(explicitFile) {
-  const dataRoot = path.resolve(process.env.NAISKOS_DATA_ROOT ?? "/var/lib/naiskos");
   const credentialsFile = explicitFile || path.join(dataRoot, "device-credentials.json");
   const stored = await readJsonIfPresent(credentialsFile);
   const centralUrl = String(process.env.NAISKOS_CENTRAL_URL ?? "").trim().replace(/\/$/, "");
@@ -337,8 +337,6 @@ async function centralGet(url, token) {
   if (response) return response;
   throw lastError ?? new Error("No se pudo consultar la central");
 }
-
-const maintenanceOutbox = "/var/lib/naiskos/system-maintenance/outbox";
 
 async function spoolMaintenanceReport(report) {
   await mkdir(maintenanceOutbox, { recursive: true, mode: 0o700 });
