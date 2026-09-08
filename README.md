@@ -24,10 +24,11 @@ central sin interrumpir la presentación.
 El navegador nunca se conecta directamente al servidor central ni recibe sus
 credenciales.
 
-El mantenimiento del SO también queda separado del navegador. El baseline 5
-instala helpers root de propósito fijo: seguridad diaria y campaña general. El
-agente sólo recibe su resultado local, lo persiste en el outbox y lo entrega al
-central; no ejecuta APT ni acepta comandos remotos.
+El mantenimiento del SO también queda separado del navegador. El baseline 8
+instala helpers root de propósito fijo: seguridad diaria, campaña general,
+verificación posterior al reinicio y entrega durable de resultados. El agente
+sólo recibe contratos locales cerrados, los persiste en el outbox y los entrega
+al central; no ejecuta APT ni acepta comandos remotos.
 
 ## Requisitos
 
@@ -193,13 +194,16 @@ procedimiento separado. `--force` existe sólo para la aceptación
 administrativa fuera de la ventana nocturna.
 
 La sonda del SO es independiente: `naiskos-system-update-check.timer` simula
-diariamente un `dist-upgrade`. El baseline 5 añade
-`naiskos-security-update.timer` y `naiskos-general-update.timer`; ambos llaman
-un ejecutable fijo sólo entre 00:00 y 06:00. Seguridad usa
-`unattended-upgrade`; la campaña general exige un permiso autenticado del
-central, ejecuta `full-upgrade`, comprueba salud y reporta paquetes cambiados,
-pendientes y reinicio requerido. Los reintentos no sustituyen el outbox
-durable.
+diariamente un `full-upgrade`. El baseline 8 deja a Naiskos como única autoridad
+de instalaciones APT automáticas y desactiva `apt-daily-upgrade.timer`. Los
+timers de seguridad y campaña general llaman un ejecutor transaccional sólo
+entre 00:00 y 06:00. Antes de modificar comprueba reloj, APT/dpkg, espacio,
+temperatura y alimentación; la campaña general exige un permiso autenticado,
+vigente y asociado a un `attemptId`. Si hay reinicio, primero persiste y reporta
+`reboot_pending`; al arrancar, otro servicio exige agente, Chromium y salud
+local antes de reportar `succeeded`. Los reportes se guardan primero en una cola
+root y se reintentan sin cambiar su ID, de modo que una caída no los pierde ni
+los duplica.
 
 ## Seguridad y operación
 

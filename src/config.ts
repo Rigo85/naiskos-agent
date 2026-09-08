@@ -45,9 +45,9 @@ export function loadConfig(): AgentConfig {
     webRoot: path.resolve(
       process.env.NAISKOS_WEB_ROOT ?? "../naiskos-ng/dist/naiskos-ng/browser",
     ),
-    centralUrl: process.env.NAISKOS_CENTRAL_URL?.replace(/\/$/, "") ?? null,
-    frameId: process.env.NAISKOS_FRAME_ID ?? null,
-    token: process.env.NAISKOS_AGENT_TOKEN ?? null,
+    centralUrl: process.env.NAISKOS_CENTRAL_URL?.trim().replace(/\/$/, "") || null,
+    frameId: process.env.NAISKOS_FRAME_ID?.trim() || null,
+    token: process.env.NAISKOS_AGENT_TOKEN?.trim() || null,
     telegramBotUsername: (process.env.NAISKOS_TELEGRAM_BOT_USERNAME ?? "naiskosbot").replace(
       /^@/,
       "",

@@ -1,0 +1,11 @@
+[Unit]
+Description=Entrega reportes durables del mantenimiento Naiskos
+After=naiskos-agent.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/naiskos/bin/naiskos-release-helper.mjs flush-maintenance-reports
+TimeoutStartSec=2min
+UMask=0077
+ProtectHome=true
+PrivateTmp=true

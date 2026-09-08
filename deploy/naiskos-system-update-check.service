@@ -1,10 +1,14 @@
 [Unit]
 Description=Consulta actualizaciones pendientes del SO sin instalarlas
 After=network-online.target naiskos-agent.service
+StartLimitIntervalSec=6h
+StartLimitBurst=8
 
 [Service]
 Type=oneshot
 ExecStart=/opt/naiskos/bin/naiskos-system-update-check
+Restart=on-failure
+RestartSec=15min
 Nice=10
 IOSchedulingClass=idle
 NoNewPrivileges=true

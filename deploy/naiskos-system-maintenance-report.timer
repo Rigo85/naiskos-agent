@@ -1,0 +1,12 @@
+[Unit]
+Description=Reintenta reportes pendientes del mantenimiento Naiskos
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=5min
+AccuracySec=30s
+RandomizedDelaySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

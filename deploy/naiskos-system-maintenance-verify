@@ -1,0 +1,71 @@
+#!/bin/sh
+set -eu
+
+helper=/opt/naiskos/bin/naiskos-release-helper.mjs
+state_root=/var/lib/naiskos/system-maintenance
+current_boot=$(cat /proc/sys/kernel/random/boot_id)
+
+"$helper" flush-maintenance-reports || true
+pending=$($helper pending-maintenance)
+[ -n "$pending" ] || exit 0
+
+printf '%s\n' "$pending" | while IFS='|' read -r attempt_id campaign mode changed packages_pending boot_before; do
+  [ -n "$attempt_id" ] || continue
+  if [ "$current_boot" = "$boot_before" ]; then
+    echo "El intento $attempt_id todavía pertenece al arranque anterior" >&2
+    exit 1
+  fi
+
+  "$helper" state-maintenance "$attempt_id" verifying "$campaign" "$mode" \
+    "$changed" "$packages_pending"
+  "$helper" report-maintenance "$mode" verifying "$changed" "$packages_pending" true \
+    "$campaign" "$attempt_id" ""
+
+  dpkg --audit | grep -q . && {
+    "$helper" state-maintenance "$attempt_id" failed "$campaign" "$mode" \
+      "$changed" "$packages_pending" dpkg_incomplete_after_reboot \
+      "dpkg informó paquetes incompletos después del reinicio"
+    "$helper" report-maintenance "$mode" failed "$changed" "$packages_pending" true \
+      "$campaign" "$attempt_id" dpkg_incomplete_after_reboot \
+      "dpkg informó paquetes incompletos después del reinicio"
+    exit 2
+  }
+  apt-get check >/dev/null 2>&1 || {
+    "$helper" state-maintenance "$attempt_id" failed "$campaign" "$mode" \
+      "$changed" "$packages_pending" apt_broken_after_reboot \
+      "APT quedó inconsistente después del reinicio"
+    "$helper" report-maintenance "$mode" failed "$changed" "$packages_pending" true \
+      "$campaign" "$attempt_id" apt_broken_after_reboot \
+      "APT quedó inconsistente después del reinicio"
+    exit 2
+  }
+
+  healthy=false
+  attempt=1
+  while [ "$attempt" -le 60 ]; do
+    if systemctl is-active --quiet naiskos-agent.service && \
+       pgrep -x chromium >/dev/null 2>&1 && \
+       curl -fsS --max-time 10 http://127.0.0.1:8080/api/v1/health | grep -q '"ok":true'; then
+      healthy=true
+      break
+    fi
+    attempt=$((attempt + 1))
+    sleep 5
+  done
+  [ "$healthy" = true ] || {
+    echo "El kiosco todavía no recuperó su salud después del reinicio" >&2
+    exit 1
+  }
+
+  after=$(apt-get -s -o Debug::NoLocking=1 full-upgrade 2>/dev/null |
+    awk '/^Inst / { count++ } END { print count+0 }')
+  "$helper" state-maintenance "$attempt_id" succeeded "$campaign" "$mode" \
+    "$changed" "$after"
+  "$helper" report-maintenance "$mode" succeeded "$changed" "$after" false \
+    "$campaign" "$attempt_id" ""
+  marker="$state_root/${campaign:-security-$(date +%F)}.completed"
+  printf '%s\n' "$(date -Iseconds) mode=$mode campaign=${campaign:-none} attempt=$attempt_id packages=$changed reboot=verified" >"$marker"
+  chmod 0600 "$marker"
+done
+
+"$helper" flush-maintenance-reports || true

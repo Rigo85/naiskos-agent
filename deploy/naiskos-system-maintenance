@@ -7,23 +7,29 @@ case "$mode" in
   *) echo "Modo inválido" >&2; exit 2 ;;
 esac
 
-preflight=false
-if [ "${2:-}" = "--preflight" ]; then preflight=true; fi
+helper=/opt/naiskos/bin/naiskos-release-helper.mjs
+state_root=/var/lib/naiskos/system-maintenance
+mkdir -p "$state_root"
+chmod 0700 "$state_root"
 
 pending_count() {
-  simulation=$(apt-get -s -o Debug::NoLocking=1 dist-upgrade 2>/dev/null) || return 1
+  simulation=$(apt-get -s -o Debug::NoLocking=1 full-upgrade 2>/dev/null) || return 1
   printf '%s\n' "$simulation" | awk '/^Inst / { count++ } END { print count+0 }'
 }
 
-if [ "$preflight" = true ]; then
-  for command in apt-get awk curl dpkg flock systemctl; do
-    command -v "$command" >/dev/null 2>&1 || {
-      echo "Falta el comando requerido: $command" >&2
+preflight_only=false
+[ "${2:-}" = "--preflight" ] && preflight_only=true
+if [ "$preflight_only" = true ]; then
+  for required_command in apt-get awk curl dpkg flock systemctl timedatectl; do
+    command -v "$required_command" >/dev/null 2>&1 || {
+      echo "Falta el comando requerido: $required_command" >&2
       exit 1
     }
   done
+  dpkg --audit | grep -q . && { echo "dpkg tiene operaciones incompletas" >&2; exit 1; }
+  apt-get check >/dev/null
   count=$(pending_count)
-  echo "preflight=ok mode=$mode pending=$count unattended=$([ -x /usr/bin/unattended-upgrade ] && echo present || echo bootstrap-required)"
+  echo "preflight=ok mode=$mode pending=$count unattended=$([ -x /usr/bin/unattended-upgrade ] && echo present || echo missing)"
   exit 0
 fi
 
@@ -32,95 +38,179 @@ case "$(date +%H)" in
   *) echo "Fuera de la ventana nocturna; no se modifica el sistema"; exit 0 ;;
 esac
 
-# El primer domingo, la campaña general ya incluye los parches de seguridad.
-if [ "$mode" = security ] && [ "$(date +%u)" = 7 ] && [ "$(date +%d)" -le 7 ]; then
-  echo "La actualización de seguridad se integra en la campaña general mensual"
-  exit 0
-fi
-
-helper=/opt/naiskos/bin/naiskos-release-helper.mjs
+attempt_id=$(cat /proc/sys/kernel/random/uuid)
 campaign=
-if [ "$mode" = general ]; then
-  campaign=$($helper system-permit)
-  [ -n "$campaign" ] || exit 0
-fi
-
-state_root=/var/lib/naiskos/system-maintenance
-mkdir -p "$state_root"
-chmod 0700 "$state_root"
-marker="$state_root/${campaign:-security-$(date +%F)}.completed"
-[ ! -e "$marker" ] || exit 0
+changed=0
+before=0
+finished=false
 
 report() {
-  report_status=$1
-  report_packages=$2
-  report_pending=$3
-  report_reboot=$4
-  report_error=${5:-}
-  attempt=1
-  while [ "$attempt" -le 3 ]; do
-    if $helper report-maintenance "$mode" "$report_status" "$report_packages" \
-      "$report_pending" "$report_reboot" "$campaign" "$report_error"; then
-      return 0
-    fi
-    attempt=$((attempt + 1))
-    sleep 2
-  done
-  return 1
+  "$helper" report-maintenance "$mode" "$1" "$2" "$3" "$4" \
+    "$campaign" "$attempt_id" "$5" "${6:-}"
 }
 
-fail() {
+state() {
+  "$helper" state-maintenance "$attempt_id" "$1" "$campaign" "$mode" \
+    "$changed" "$before" "${2:-}" "${3:-}"
+}
+
+unexpected_exit() {
+  code=$?
+  [ "$code" -eq 0 ] || [ "$finished" = true ] || {
+    set +e
+    state failed unexpected_exit "El ejecutor terminó sin cerrar la transacción"
+    report failed "$changed" "$before" false unexpected_exit \
+      "El ejecutor terminó sin cerrar la transacción"
+  }
+}
+trap unexpected_exit EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+terminal_failure() {
   message=$1
+  error_code=$2
   echo "$message" >&2
-  report failed 0 "${before:-0}" false "$message" || true
+  state failed "$error_code" "$message" || true
+  report failed "$changed" "$before" false "$error_code" "$message" || true
+  finished=true
+  exit 2
+}
+
+transient_failure() {
+  message=$1
+  error_code=$2
+  echo "$message" >&2
+  state deferred "$error_code" "$message" || true
+  report deferred "$changed" "$before" false "$error_code" "$message" || true
+  finished=true
   exit 1
 }
 
 exec 9>/run/naiskos-system-maintenance.lock
-flock -n 9 || { echo "Ya existe otro mantenimiento del sistema"; exit 0; }
+flock -n 9 || transient_failure "Otro mantenimiento del sistema conserva el bloqueo" lock_busy
 
-report running 0 0 false || fail "No se pudo registrar el inicio del mantenimiento"
+if [ "$mode" = general ]; then
+  permit_error="$state_root/permit-$attempt_id.error"
+  if ! permit=$($helper system-permit 2>"$permit_error"); then
+    message=$(tail -n 8 "$permit_error" | tr '\n' ' ' | cut -c1-900)
+    rm -f "$permit_error"
+    transient_failure "No se pudo obtener autorización central: $message" authorization_failed
+  fi
+  rm -f "$permit_error"
+  [ -n "$permit" ] || { finished=true; exit 0; }
+  IFS='|' read -r campaign permitted_attempt expires_at <<EOF
+$permit
+EOF
+  [ -n "$campaign" ] && [ -n "$permitted_attempt" ] && [ -n "$expires_at" ] || \
+    terminal_failure "El permiso central llegó incompleto" invalid_permit
+  attempt_id=$permitted_attempt
+fi
 
-apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=900 update ||
-  fail "Falló la actualización de índices APT"
-before=$(pending_count) || fail "No se pudo calcular el estado de paquetes antes de actualizar"
+marker="$state_root/${campaign:-security-$(date +%F)}.completed"
+[ ! -e "$marker" ] || { finished=true; exit 0; }
+
+state authorized
+report authorized 0 0 false ""
+
+timedatectl show --property=NTPSynchronized --value | grep -qi '^yes$' || \
+  transient_failure "El reloj todavía no está sincronizado" clock_unsynchronized
+
+dpkg --audit | grep -q . && terminal_failure "dpkg tiene operaciones incompletas" dpkg_incomplete
+apt-get check >/dev/null 2>&1 || terminal_failure "APT detectó dependencias rotas" apt_broken
+
+available_kib=$(df -Pk /var/cache/apt/archives | awk 'NR==2 {print $4}')
+[ "${available_kib:-0}" -ge 2097152 ] || \
+  terminal_failure "No existen 2 GiB libres para actualizar con seguridad" insufficient_space
+
+if command -v vcgencmd >/dev/null 2>&1; then
+  throttle_hex=$(vcgencmd get_throttled 2>/dev/null | sed -n 's/^throttled=//p')
+  case "$throttle_hex" in
+    0x*) throttle_value=$((throttle_hex)); [ $((throttle_value & 15)) -eq 0 ] || \
+      transient_failure "La Raspberry informa subtensión o limitación activa: $throttle_hex" power_or_thermal_throttle ;;
+  esac
+fi
+
+if [ -r /sys/class/thermal/thermal_zone0/temp ]; then
+  temperature=$(cat /sys/class/thermal/thermal_zone0/temp)
+  [ "$temperature" -lt 80000 ] || transient_failure "Temperatura demasiado alta para actualizar" temperature_high
+fi
+
+[ "$mode" != security ] || [ -x /usr/bin/unattended-upgrade ] || \
+  terminal_failure "Falta unattended-upgrade; el baseline debe instalarlo" dependency_missing
+
+state preflight
+report preflight 0 0 false ""
+
+apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=900 update || \
+  transient_failure "Falló la actualización de índices APT" apt_index_failed
+
+plan="$state_root/$attempt_id.apt-plan.txt"
+apt-get -s -o Debug::NoLocking=1 full-upgrade >"$plan" 2>&1 || \
+  terminal_failure "No se pudo construir el plan de actualización" apt_plan_failed
+chmod 0600 "$plan"
+before=$(awk '/^Inst / { count++ } END { print count+0 }' "$plan")
+
+if awk '/^Remv / {print $2}' "$plan" | grep -Eq \
+  '^(systemd|systemd-sysv|linux-image|raspi-firmware|raspberrypi-sys-mods|network-manager|openssh-server|chromium|labwc)$'; then
+  terminal_failure "El plan pretende eliminar un componente crítico" critical_package_removal
+fi
+
+state prepared
+state applying
+report running 0 "$before" false ""
 
 if [ "$mode" = security ]; then
-  if ! command -v unattended-upgrade >/dev/null 2>&1; then
-    DEBIAN_FRONTEND=noninteractive apt-get -y --no-install-recommends \
-      -o Acquire::Retries=3 -o DPkg::Lock::Timeout=900 install unattended-upgrades ||
-      fail "No se pudo instalar el actualizador de seguridad"
-  fi
-  unattended-upgrade --verbose || fail "Falló la actualización de seguridad"
+  unattended-upgrade --verbose || transient_failure "Falló la actualización de seguridad" security_upgrade_failed
 else
   DEBIAN_FRONTEND=noninteractive apt-get -y \
     -o Acquire::Retries=3 -o DPkg::Lock::Timeout=900 \
-    -o Dpkg::Options::=--force-confold full-upgrade ||
-    fail "Falló la actualización general del sistema"
+    -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
+    full-upgrade || transient_failure "Falló la actualización general del sistema" general_upgrade_failed
 fi
 
-dpkg --audit | grep -q . && fail "dpkg informó paquetes incompletos después de actualizar"
-systemctl is-active --quiet naiskos-agent.service || fail "El agente no quedó activo"
-curl -fsS http://127.0.0.1:8080/api/v1/health | grep -q '"ok":true' ||
-  fail "La salud local no respondió después de actualizar"
+dpkg --audit | grep -q . && terminal_failure "dpkg informó paquetes incompletos" dpkg_incomplete_after
+apt-get check >/dev/null 2>&1 || terminal_failure "APT quedó con dependencias rotas" apt_broken_after
+after=$(pending_count) || terminal_failure "No se pudo calcular el estado posterior" apt_postcheck_failed
+[ "$before" -gt "$after" ] && changed=$((before - after)) || changed=0
+before=$after
 
-after=$(pending_count) || fail "No se pudo calcular el estado de paquetes después de actualizar"
-if [ "$before" -gt "$after" ]; then changed=$((before - after)); else changed=0; fi
 reboot=false
 if [ -e /var/run/reboot-required ] || { [ "$mode" = general ] && [ "$changed" -gt 0 ]; }; then
   reboot=true
 fi
 
-report succeeded "$changed" "$after" "$reboot" || {
-  echo "La actualización terminó pero no pudo registrar su resultado; se reintentará" >&2
-  exit 1
-}
-printf '%s\n' "$(date -Iseconds) mode=$mode campaign=${campaign:-none} packages=$changed reboot=$reboot" >"$marker"
-chmod 0600 "$marker"
-
 if [ "$reboot" = true ]; then
-  # El endpoint local encola el evento de manera durable; este margen permite
-  # entregarlo al central antes del reinicio sin depender de ello para conservarlo.
-  sleep 15
-  systemctl reboot
+  state reboot_pending
+  report reboot_pending "$changed" "$after" true ""
+  finished=true
+  systemctl reboot || {
+    finished=false
+    terminal_failure "El sistema no aceptó el reinicio" reboot_request_failed
+  }
+  exit 0
 fi
+
+state verifying
+report verifying "$changed" "$after" false ""
+systemctl is-active --quiet naiskos-agent.service || \
+  terminal_failure "El agente no quedó activo" agent_inactive
+
+health_ok=false
+health_attempt=1
+while [ "$health_attempt" -le 12 ]; do
+  if curl -fsS --max-time 10 http://127.0.0.1:8080/api/v1/health | grep -q '"ok":true'; then
+    health_ok=true
+    break
+  fi
+  health_attempt=$((health_attempt + 1))
+  sleep 5
+done
+[ "$health_ok" = true ] || terminal_failure "La salud local no se recuperó" local_health_failed
+
+state succeeded
+report succeeded "$changed" "$after" false ""
+printf '%s\n' "$(date -Iseconds) mode=$mode campaign=${campaign:-none} attempt=$attempt_id packages=$changed reboot=false" >"$marker"
+chmod 0600 "$marker"
+finished=true

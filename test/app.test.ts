@@ -272,17 +272,21 @@ describe("agente HTTP", () => {
     expect(invalid.statusCode).toBe(400);
 
     const campaignId = "d210a8b6-1a17-4759-af25-2cf1fca0c059";
+    const attemptId = "e210a8b6-1a17-4759-af25-2cf1fca0c050";
+    const reportId = "f210a8b6-1a17-4759-af25-2cf1fca0c051";
     const accepted = await app.inject({
       method: "POST",
       url: "/api/v1/system/maintenance-events",
       headers: { "x-naiskos-request": "system-maintenance" },
       payload: {
+        id: reportId,
         mode: "general",
         status: "succeeded",
         packagesChanged: 7,
         packagesPending: 1,
         rebootRequired: true,
         campaignId,
+        attemptId,
       },
     });
     expect(accepted.statusCode).toBe(202);
@@ -297,6 +301,8 @@ describe("agente HTTP", () => {
       packagesPending: 1,
       rebootRequired: true,
       campaignId,
+      attemptId,
+      id: reportId,
     });
     await app.close();
   });

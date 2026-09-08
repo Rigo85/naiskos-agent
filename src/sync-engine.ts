@@ -184,8 +184,8 @@ export class SyncEngine {
     });
   }
 
-  async enqueueEvent(event: Record<string, unknown>): Promise<string> {
-    const id = randomUUID();
+  async enqueueEvent(event: Record<string, unknown>, requestedId?: string): Promise<string> {
+    const id = requestedId ?? randomUUID();
     await this.withOutboxLock(async () => {
       const file = path.join(this.config.dataRoot, "outbox.json");
       const events =

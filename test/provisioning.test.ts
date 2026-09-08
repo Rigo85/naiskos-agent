@@ -80,6 +80,13 @@ describe("alta del agente", () => {
       "e410e4df-7e9a-4e18-a088-56a775c1b74e",
     );
     expect(reloaded.token).toBe(local.agentToken);
+
+    const mismatched = fixtureConfig(dataRoot);
+    mismatched.frameId = "a210a8b6-1a17-4759-af25-2cf1fca0c056";
+    mismatched.token = local.agentToken;
+    await expect(loadProvisionedCredentials(mismatched)).rejects.toThrow(
+      /no coinciden/,
+    );
   });
 });
 

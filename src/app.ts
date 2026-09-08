@@ -234,12 +234,16 @@ export async function buildApp(
   });
   app.post<{
     Body: {
+      id?: string;
+      at?: string;
       mode?: string;
       status?: string;
       packagesChanged?: number;
       packagesPending?: number;
       rebootRequired?: boolean;
       campaignId?: string;
+      attemptId?: string;
+      errorCode?: string;
       error?: string;
     };
   }>("/api/v1/system/maintenance-events", async (request, reply) => {
@@ -251,28 +255,39 @@ export async function buildApp(
     const packagesChanged = Number(request.body?.packagesChanged);
     const packagesPending = Number(request.body?.packagesPending);
     const campaignId = request.body?.campaignId;
+    const attemptId = request.body?.attemptId;
+    const reportId = request.body?.id;
     if (
       (mode !== "security" && mode !== "general") ||
-      !["running", "succeeded", "failed"].includes(String(status)) ||
+      !["authorized", "preflight", "running", "deferred", "reboot_pending", "verifying", "succeeded", "failed"].includes(String(status)) ||
       !Number.isSafeInteger(packagesChanged) || packagesChanged < 0 || packagesChanged > 10_000 ||
       !Number.isSafeInteger(packagesPending) || packagesPending < 0 || packagesPending > 10_000 ||
-      (mode === "general" && (typeof campaignId !== "string" || !isUuid(campaignId)))
+      (campaignId !== undefined && (typeof campaignId !== "string" || !isUuid(campaignId))) ||
+      (attemptId !== undefined && (typeof attemptId !== "string" || !isUuid(attemptId))) ||
+      (reportId !== undefined && (typeof reportId !== "string" || !isUuid(reportId))) ||
+      (mode === "general" && !campaignId && !["deferred", "failed"].includes(String(status)))
     ) {
       return reply.code(400).send({ error: "Evento de mantenimiento inválido" });
     }
     const id = await engine.enqueueEvent({
       type: "system.maintenance.status",
-      at: new Date().toISOString(),
+      at: typeof request.body?.at === "string" && Number.isFinite(Date.parse(request.body.at))
+        ? request.body.at
+        : new Date().toISOString(),
       mode,
       status,
       packagesChanged,
       packagesPending,
       rebootRequired: request.body?.rebootRequired === true,
       ...(campaignId ? { campaignId } : {}),
+      ...(attemptId ? { attemptId } : {}),
+      ...(typeof request.body?.errorCode === "string"
+        ? { errorCode: request.body.errorCode.slice(0, 80) }
+        : {}),
       ...(typeof request.body?.error === "string"
         ? { error: request.body.error.slice(0, 1_000) }
         : {}),
-    });
+    }, reportId);
     void engine.sync().catch(() => undefined);
     return reply.code(202).send({ accepted: true, id });
   });

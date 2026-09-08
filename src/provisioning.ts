@@ -317,6 +317,15 @@ export async function loadProvisionedCredentials(
   ) {
     return null;
   }
+  if (Boolean(config.frameId) !== Boolean(config.token)) {
+    throw new Error("Las credenciales centrales del entorno están incompletas");
+  }
+  if (
+    config.frameId && config.token &&
+    (config.frameId !== value.frameId || config.token !== value.agentToken)
+  ) {
+    throw new Error("Las fuentes de credenciales centrales no coinciden");
+  }
   config.frameId = value.frameId;
   config.token = value.agentToken;
   return value;

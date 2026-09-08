@@ -1,0 +1,20 @@
+[Unit]
+Description=Verifica Naiskos después de un reinicio de mantenimiento
+After=network-online.target naiskos-agent.service graphical.target
+Wants=network-online.target
+StartLimitIntervalSec=30min
+StartLimitBurst=6
+
+[Service]
+Type=oneshot
+ExecStart=/opt/naiskos/bin/naiskos-system-maintenance-verify
+TimeoutStartSec=10min
+Restart=on-failure
+RestartSec=2min
+RestartPreventExitStatus=2
+UMask=0077
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

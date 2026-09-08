@@ -1,7 +1,7 @@
 #!/opt/node24/bin/node
 
 import { execFile as execFileCallback } from "node:child_process";
-import { createHash, verify } from "node:crypto";
+import { createHash, randomUUID, verify } from "node:crypto";
 import { createReadStream } from "node:fs";
 import {
   chmod,
@@ -159,6 +159,9 @@ if (command === "verify-request") {
     signal: AbortSignal.timeout(10_000),
   });
   if (!response.ok) fail(`Reporte HTTP ${response.status}`);
+} else if (command === "check-central-credentials") {
+  const credentials = await centralCredentials(args[0]);
+  process.stdout.write(credentials.frameId);
 } else if (command === "system-permit") {
   const { centralUrl, frameId, token } = await centralCredentials();
   const response = await centralGet(
@@ -170,37 +173,114 @@ if (command === "verify-request") {
   const permit = await response.json();
   if (
     permit?.mode !== "general" || !uuidPattern(String(permit?.campaignId ?? "")) ||
+    !uuidPattern(String(permit?.attemptId ?? "")) ||
     !/^[0-9]{4}-[0-9]{2}$/.test(String(permit?.period ?? "")) ||
     permit?.timezone !== "America/Lima" || permit?.maintenanceWindow?.from !== "00:00" ||
-    permit?.maintenanceWindow?.until !== "06:00"
+    permit?.maintenanceWindow?.until !== "06:00" ||
+    !Number.isFinite(Date.parse(String(permit?.expiresAt ?? ""))) ||
+    Date.parse(permit.expiresAt) <= Date.now() ||
+    !Number.isFinite(Date.parse(String(permit?.serverTime ?? ""))) ||
+    Math.abs(Date.parse(permit.serverTime) - Date.now()) > 10 * 60_000
   ) fail("Permiso de mantenimiento inválido");
-  process.stdout.write(String(permit.campaignId));
+  process.stdout.write([
+    String(permit.campaignId),
+    String(permit.attemptId),
+    String(permit.expiresAt),
+  ].join("|"));
 } else if (command === "report-maintenance") {
-  const [mode, status, packagesRaw, pendingRaw, rebootRaw, campaignId = "", error = ""] = args;
+  const [
+    mode, status, packagesRaw, pendingRaw, rebootRaw,
+    campaignId = "", attemptId = "", errorCode = "", error = "",
+  ] = args;
   const packagesChanged = Number(packagesRaw);
   const packagesPending = Number(pendingRaw);
   if (
     !["security", "general"].includes(mode) ||
-    !["running", "succeeded", "failed"].includes(status) ||
+    !["authorized", "preflight", "running", "deferred", "reboot_pending", "verifying", "succeeded", "failed"].includes(status) ||
     !Number.isSafeInteger(packagesChanged) || packagesChanged < 0 || packagesChanged > 10000 ||
     !Number.isSafeInteger(packagesPending) || packagesPending < 0 || packagesPending > 10000 ||
-    (mode === "general" && !uuidPattern(campaignId))
+    (campaignId && !uuidPattern(campaignId)) ||
+    (attemptId && !uuidPattern(attemptId)) ||
+    (mode === "general" && !campaignId && !["deferred", "failed"].includes(status)) ||
+    (errorCode && !/^[a-z0-9][a-z0-9._-]{0,79}$/.test(errorCode))
   ) fail("Reporte de mantenimiento inválido");
-  const response = await fetch("http://127.0.0.1:8080/api/v1/system/maintenance-events", {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-naiskos-request": "system-maintenance" },
-    body: JSON.stringify({
-      mode,
-      status,
-      packagesChanged,
-      packagesPending,
-      rebootRequired: rebootRaw === "true",
-      ...(campaignId ? { campaignId } : {}),
-      ...(error ? { error: error.slice(0, 1_000) } : {}),
-    }),
-    signal: AbortSignal.timeout(10_000),
+  await spoolMaintenanceReport({
+    id: randomUUID(),
+    at: new Date().toISOString(),
+    mode,
+    status,
+    packagesChanged,
+    packagesPending,
+    rebootRequired: rebootRaw === "true",
+    ...(campaignId ? { campaignId } : {}),
+    ...(attemptId ? { attemptId } : {}),
+    ...(errorCode ? { errorCode } : {}),
+    ...(error ? { error: error.slice(0, 1_000) } : {}),
   });
-  if (!response.ok) fail(`Reporte HTTP ${response.status}`);
+} else if (command === "flush-maintenance-reports") {
+  await flushMaintenanceReports();
+} else if (command === "state-maintenance") {
+  const [
+    attemptId, phase, campaignId = "", mode = "", packagesRaw = "0",
+    pendingRaw = "0", errorCode = "", error = "",
+  ] = args;
+  const packagesChanged = Number(packagesRaw);
+  const packagesPending = Number(pendingRaw);
+  if (
+    !uuidPattern(attemptId ?? "") ||
+    !["authorized", "preflight", "prepared", "applying", "reboot_pending", "verifying", "succeeded", "failed", "deferred"].includes(phase) ||
+    (campaignId && !uuidPattern(campaignId)) ||
+    !["security", "general"].includes(mode) ||
+    !Number.isSafeInteger(packagesChanged) || packagesChanged < 0 || packagesChanged > 10000 ||
+    !Number.isSafeInteger(packagesPending) || packagesPending < 0 || packagesPending > 10000 ||
+    (errorCode && !/^[a-z0-9][a-z0-9._-]{0,79}$/.test(errorCode))
+  ) fail("Estado de mantenimiento inválido");
+  const root = "/var/lib/naiskos/system-maintenance";
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  await chmod(root, 0o700);
+  const file = path.join(root, `${attemptId}.json`);
+  const previous = await readJsonIfPresent(file);
+  const bootId = (await readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim();
+  await writeJsonAtomic(file, {
+    schemaVersion: 2,
+    attemptId,
+    ...(campaignId ? { campaignId } : {}),
+    mode,
+    packagesChanged,
+    packagesPending,
+    phase,
+    startedAt: previous?.startedAt ?? new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    bootIdBefore: previous?.bootIdBefore ?? bootId,
+    ...(previous?.rebootRequestedAt ? { rebootRequestedAt: previous.rebootRequestedAt } : {}),
+    ...(phase === "reboot_pending" ? { rebootRequestedAt: new Date().toISOString() } : {}),
+    ...(errorCode ? { errorCode } : {}),
+    ...(error ? { error: error.slice(0, 1_000) } : {}),
+  }, 0o600);
+} else if (command === "pending-maintenance") {
+  const root = "/var/lib/naiskos/system-maintenance";
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  const entries = (await readdir(root, { withFileTypes: true }))
+    .filter((entry) => entry.isFile() && uuidPattern(entry.name.replace(/\.json$/, "")))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  for (const entry of entries) {
+    const state = await readJsonIfPresent(path.join(root, entry.name));
+    if (!state || !["reboot_pending", "verifying"].includes(state.phase)) continue;
+    if (
+      !uuidPattern(String(state.attemptId ?? "")) ||
+      !["security", "general"].includes(state.mode) ||
+      !Number.isSafeInteger(state.packagesChanged) ||
+      !Number.isSafeInteger(state.packagesPending)
+    ) fail("Estado pendiente inválido");
+    process.stdout.write([
+      state.attemptId,
+      state.campaignId ?? "",
+      state.mode,
+      String(state.packagesChanged),
+      String(state.packagesPending),
+      state.bootIdBefore,
+    ].join("|") + "\n");
+  }
 } else {
   fail("Comando desconocido");
 }
@@ -209,10 +289,24 @@ async function centralCredentials(explicitFile) {
   const dataRoot = path.resolve(process.env.NAISKOS_DATA_ROOT ?? "/var/lib/naiskos");
   const credentialsFile = explicitFile || path.join(dataRoot, "device-credentials.json");
   const stored = await readJsonIfPresent(credentialsFile);
-  const centralUrl = String(process.env.NAISKOS_CENTRAL_URL ?? "").replace(/\/$/, "");
-  const frameId = String(process.env.NAISKOS_FRAME_ID ?? stored?.frameId ?? "");
-  const token = String(process.env.NAISKOS_AGENT_TOKEN ?? stored?.agentToken ?? "");
-  if (!centralUrl.startsWith("https://") || !uuidPattern(frameId) || token.length < 32) {
+  const centralUrl = String(process.env.NAISKOS_CENTRAL_URL ?? "").trim().replace(/\/$/, "");
+  const environmentFrameId = String(process.env.NAISKOS_FRAME_ID ?? "").trim();
+  const environmentToken = String(process.env.NAISKOS_AGENT_TOKEN ?? "").trim();
+  if (Boolean(environmentFrameId) !== Boolean(environmentToken)) {
+    fail("Credenciales centrales incompletas en el entorno");
+  }
+  const storedFrameId = String(stored?.frameId ?? "").trim();
+  const storedToken = String(stored?.agentToken ?? "").trim();
+  if (
+    environmentFrameId && storedFrameId &&
+    (environmentFrameId !== storedFrameId || environmentToken !== storedToken)
+  ) fail("Las fuentes de credenciales centrales no coinciden");
+  const frameId = environmentFrameId || storedFrameId;
+  const token = environmentToken || storedToken;
+  if (
+    !centralUrl.startsWith("https://") || !uuidPattern(frameId) ||
+    !/^[A-Za-z0-9_-]{43}$/.test(token) || Buffer.from(token, "base64url").length !== 32
+  ) {
     fail("Configuración central inválida");
   }
   return { centralUrl, frameId, token };
@@ -227,17 +321,59 @@ async function centralGet(url, token) {
         headers: { authorization: `Bearer ${token}` },
         signal: AbortSignal.timeout(20_000),
       });
-      if (response.status < 500) return response;
+      if (response.status !== 429 && response.status < 500) return response;
       lastError = new Error(`Central respondió HTTP ${response.status}`);
     } catch (error) {
       lastError = error;
     }
     if (attempt < 3) {
-      await new Promise((resolve) => setTimeout(resolve, 1_000 * (attempt + 1)));
+      const retryAfter = Number(response?.headers.get("retry-after"));
+      const delay = Number.isFinite(retryAfter)
+        ? Math.min(30_000, Math.max(1_000, retryAfter * 1_000))
+        : 1_000 * (attempt + 1) + Math.floor(Math.random() * 500);
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
   if (response) return response;
   throw lastError ?? new Error("No se pudo consultar la central");
+}
+
+const maintenanceOutbox = "/var/lib/naiskos/system-maintenance/outbox";
+
+async function spoolMaintenanceReport(report) {
+  await mkdir(maintenanceOutbox, { recursive: true, mode: 0o700 });
+  await chmod(maintenanceOutbox, 0o700);
+  const rank = {
+    authorized: "10", preflight: "20", running: "30", deferred: "40",
+    reboot_pending: "50", verifying: "60", succeeded: "70", failed: "80",
+  }[report.status] ?? "99";
+  const filename = `${Date.now()}-${rank}-${report.id}.json`;
+  await writeJsonAtomic(path.join(maintenanceOutbox, filename), report, 0o600);
+  await flushMaintenanceReports().catch(() => undefined);
+}
+
+async function flushMaintenanceReports() {
+  await mkdir(maintenanceOutbox, { recursive: true, mode: 0o700 });
+  await chmod(maintenanceOutbox, 0o700);
+  const entries = (await readdir(maintenanceOutbox, { withFileTypes: true }))
+    .filter((entry) => entry.isFile() && /^\d{13}-\d{2}-[0-9a-f-]{36}\.json$/i.test(entry.name))
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .slice(0, 100);
+  for (const entry of entries) {
+    const file = path.join(maintenanceOutbox, entry.name);
+    const report = await readJsonIfPresent(file);
+    if (!report || !uuidPattern(String(report.id ?? ""))) {
+      fail("Spool de mantenimiento inválido");
+    }
+    const response = await fetch("http://127.0.0.1:8080/api/v1/system/maintenance-events", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-naiskos-request": "system-maintenance" },
+      body: JSON.stringify(report),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) fail(`Reporte HTTP ${response.status}`);
+    await rm(file, { force: true });
+  }
 }
 
 async function applyMigration(descriptorFile, migrationRoot, baselineFile, stateRoot) {
@@ -575,6 +711,7 @@ function assertSafeDestination(destination) {
     /^\/etc\/systemd\/system\/naiskos-[A-Za-z0-9@_.-]+\.(?:service|timer|path)$/,
     /^\/opt\/naiskos\/bin\/naiskos-[A-Za-z0-9._-]+$/,
     /^\/etc\/chromium\/policies\/managed\/naiskos-[A-Za-z0-9._-]+\.json$/,
+    /^\/etc\/apt\/apt\.conf\.d\/99-naiskos-periodic$/,
   ];
   if (!allowed.some((pattern) => pattern.test(destination))) {
     fail(`Destino fuera de las rutas administradas: ${destination}`);
@@ -669,7 +806,12 @@ function versionPattern(value) { return typeof value === "string" && /^[0-9]+$/.
 function uuidPattern(value) { return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value); }
 function timePattern(value) { return /^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/.test(value); }
 function accountPattern(value) { return typeof value === "string" && /^(?:root|naiskos|riggito)$/.test(value); }
-function unitNamePattern(value) { return typeof value === "string" && /^naiskos-[a-z0-9@_.-]+\.(?:service|timer|path)$/.test(value); }
+function unitNamePattern(value) {
+  return typeof value === "string" && (
+    /^naiskos-[a-z0-9@_.-]+\.(?:service|timer|path)$/.test(value) ||
+    value === "apt-daily-upgrade.timer"
+  );
+}
 async function sha256(file) {
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(file)) hash.update(chunk);
