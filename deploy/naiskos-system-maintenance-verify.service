@@ -1,6 +1,6 @@
 [Unit]
 Description=Verifica Naiskos después de un reinicio de mantenimiento
-After=network-online.target naiskos-agent.service graphical.target
+After=network-online.target naiskos-agent.service
 Wants=network-online.target
 StartLimitIntervalSec=30min
 StartLimitBurst=6
