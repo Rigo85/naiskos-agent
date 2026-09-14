@@ -10,6 +10,7 @@ import { SyncEngine } from "./sync-engine.js";
 import { FitMode } from "./types.js";
 import { normalizeSettings } from "./validation.js";
 import { errorForLog } from "./logging.js";
+import type { ViewerPlaybackSnapshot, ViewerPlaybackState } from "./viewer-monitor.js";
 
 type SystemAction = "exit" | "poweroff";
 type DisplayScheduleEvent =
@@ -295,6 +296,56 @@ export async function buildApp(
     reply.header("etag", `"${engine.currentManifest().version}"`);
     return engine.currentManifest();
   });
+  app.get("/api/v1/manifest/version", async () => ({
+    version: engine.currentManifest().version,
+  }));
+  app.post<{ Body: unknown }>("/api/v1/viewer/heartbeat", async (request, reply) => {
+    if (request.headers["x-naiskos-request"] !== "viewer") {
+      return reply.code(403).send({ error: "Solicitud local inválida" });
+    }
+    const snapshot = viewerSnapshot(request.body);
+    if (!snapshot) return reply.code(400).send({ error: "Estado del visor inválido" });
+    engine.viewerMonitor.record(snapshot);
+    return reply.code(204).send();
+  });
+  app.get("/api/v1/viewer/restart-needed", async () => ({
+    restart: engine.viewerMonitor.claimRestart(),
+  }));
+  app.post<{ Body: unknown }>("/api/v1/viewer/playback-events", async (request, reply) => {
+    if (request.headers["x-naiskos-request"] !== "viewer") {
+      return reply.code(403).send({ error: "Solicitud local inválida" });
+    }
+    const body = playbackEvent(request.body);
+    if (!body) return reply.code(400).send({ error: "Evento de reproducción inválido" });
+    engine.viewerMonitor.record(body);
+    const id = await engine.enqueueEvent({ ...body, at: new Date().toISOString() });
+    if (body.type === "viewer.playback.skipped" && body.mediaId) {
+      void engine.inspectAndRepairMedia(body.mediaId).then(
+        async (result) => {
+          await engine.enqueueEvent({
+            type: "viewer.media.integrity",
+            at: new Date().toISOString(),
+            mediaId: body.mediaId,
+            mediaSha256: body.mediaSha256,
+            result,
+          });
+          void engine.sync().catch(() => undefined);
+        },
+        async (error: unknown) => {
+          await engine.enqueueEvent({
+            type: "viewer.media.integrity",
+            at: new Date().toISOString(),
+            mediaId: body.mediaId,
+            mediaSha256: body.mediaSha256,
+            result: "failed",
+            error: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500),
+          });
+        },
+      );
+    }
+    void engine.sync().catch(() => undefined);
+    return reply.code(202).send({ accepted: true, id });
+  });
   app.get("/api/v1/weather", async () => engine.currentWeather());
   app.get("/api/v1/notifications", async () => ({
     notifications: engine.currentNotifications(),
@@ -521,6 +572,69 @@ export async function buildApp(
   }
 
   return app;
+}
+
+const VIEWER_STATES = new Set<ViewerPlaybackState>([
+  "empty", "photo", "loading", "playing", "paused", "waiting", "recovering", "error",
+]);
+
+function viewerSnapshot(value: unknown): ViewerPlaybackSnapshot | null {
+  if (!value || typeof value !== "object") return null;
+  const body = value as Record<string, unknown>;
+  const mediaId = body.mediaId;
+  const mediaKind = body.mediaKind;
+  const state = body.state;
+  const view = body.view;
+  const numbers = [body.currentTime, body.duration, body.readyState, body.networkState];
+  if (
+    !(mediaId === null || (typeof mediaId === "string" && mediaId.length <= 128)) ||
+    !(mediaKind === null || mediaKind === "photo" || mediaKind === "video") ||
+    typeof state !== "string" || !VIEWER_STATES.has(state as ViewerPlaybackState) ||
+    (view !== "viewer" && view !== "overlay") ||
+    numbers.some((number) => typeof number !== "number" || !Number.isFinite(number) || number < 0) ||
+    typeof body.paused !== "boolean" || typeof body.ended !== "boolean" ||
+    typeof body.seeking !== "boolean"
+  ) return null;
+  return {
+    mediaId: mediaId as string | null,
+    mediaKind: mediaKind as "photo" | "video" | null,
+    state: state as ViewerPlaybackState,
+    currentTime: body.currentTime as number,
+    duration: body.duration as number,
+    readyState: body.readyState as number,
+    networkState: body.networkState as number,
+    paused: body.paused as boolean,
+    ended: body.ended as boolean,
+    seeking: body.seeking as boolean,
+    view,
+  };
+}
+
+function playbackEvent(value: unknown): (ViewerPlaybackSnapshot & {
+  type: "viewer.playback.recovery" | "viewer.playback.recovered" | "viewer.playback.skipped";
+  reason: string;
+  attempt: number;
+  mediaSha256: string | null;
+  mediaErrorCode: number | null;
+}) | null {
+  const snapshot = viewerSnapshot(value);
+  if (!snapshot || !value || typeof value !== "object") return null;
+  const body = value as Record<string, unknown>;
+  if (
+    !["viewer.playback.recovery", "viewer.playback.recovered", "viewer.playback.skipped"].includes(String(body.type)) ||
+    typeof body.reason !== "string" || body.reason.length < 1 || body.reason.length > 120 ||
+    !Number.isSafeInteger(body.attempt) || Number(body.attempt) < 0 || Number(body.attempt) > 10 ||
+    !(body.mediaSha256 === null || (typeof body.mediaSha256 === "string" && /^[a-f0-9]{64}$/i.test(body.mediaSha256))) ||
+    !(body.mediaErrorCode === null || (Number.isSafeInteger(body.mediaErrorCode) && Number(body.mediaErrorCode) >= 0 && Number(body.mediaErrorCode) <= 10))
+  ) return null;
+  return {
+    ...snapshot,
+    type: body.type as "viewer.playback.recovery" | "viewer.playback.recovered" | "viewer.playback.skipped",
+    reason: body.reason,
+    attempt: Number(body.attempt),
+    mediaSha256: body.mediaSha256 as string | null,
+    mediaErrorCode: body.mediaErrorCode as number | null,
+  };
 }
 
 function mediaType(extension: string): string {

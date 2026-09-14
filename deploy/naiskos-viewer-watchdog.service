@@ -1,0 +1,13 @@
+[Unit]
+Description=Supervisión del visor Chromium de Naiskos
+After=naiskos-agent.service
+Wants=naiskos-agent.service
+
+[Service]
+Type=simple
+ExecStart=/opt/naiskos/bin/naiskos-viewer-watchdog
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

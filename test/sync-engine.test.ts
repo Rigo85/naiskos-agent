@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -30,6 +30,32 @@ afterEach(async () => {
 });
 
 describe("sincronización del agente", () => {
+  it("reemplaza una copia local cuyo tamaño no coincide con el manifiesto", async () => {
+    const dataRoot = await mkdtemp(path.join(os.tmpdir(), "naiskos-media-size-"));
+    temporaryDirectories.push(dataRoot);
+    const good = Buffer.from("contenido-completo");
+    const hash = createHash("sha256").update(good).digest("hex");
+    const filename = `${hash}.mp4`;
+    await mkdir(path.join(dataRoot, "media"), { recursive: true });
+    await writeFile(path.join(dataRoot, "media", filename), "cortado");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(good)));
+    const config = {
+      host: "127.0.0.1", port: 8080, dataRoot, webRoot: dataRoot,
+      centralUrl: "https://naiskos.test", frameId: "11111111-1111-4111-8111-111111111111",
+      token: "token", telegramBotUsername: "naiskosbot", deviceBootstrapToken: null,
+      deviceName: null, frameWidth: 1280, frameHeight: 800, syncIntervalMs: 5_000,
+      weatherSyncIntervalMs: 60_000, diskBlockPercent: 90,
+    } satisfies AgentConfig;
+    const engine = new SyncEngine(config, emptyManifest(config.frameId));
+    const download = (engine as unknown as {
+      downloadIfMissing(url: string, name: string, expectedHash: string, token: string, expectedSize: number): Promise<void>;
+    }).downloadIfMissing.bind(engine);
+
+    await download("https://naiskos.test/display.mp4", filename, hash, "token", good.length);
+
+    expect(await readFile(path.join(dataRoot, "media", filename))).toEqual(good);
+  });
+
   it("activa el medio aunque una miniatura opcional no pueda descargarse", async () => {
     const dataRoot = await mkdtemp(path.join(os.tmpdir(), "naiskos-thumbnail-fallback-"));
     temporaryDirectories.push(dataRoot);

@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 
 import { AgentConfig } from "./config.js";
 import { AgentStatus } from "./types.js";
+import type { ViewerMonitorSnapshot } from "./viewer-monitor.js";
 
 const execFileAsync = promisify(execFile);
 const KIB = 1024;
@@ -83,6 +84,7 @@ export interface FullTelemetry {
     transport: "hdmi" | "analog" | "usb" | "unknown";
   };
   clock: { synchronized: boolean; timezone: string };
+  viewer: ViewerMonitorSnapshot;
 }
 
 export function heartbeatTelemetry(status: AgentStatus): HeartbeatTelemetry {
@@ -103,6 +105,13 @@ export async function collectSystemTelemetry(
   status: AgentStatus,
   pendingOutbox: number,
   desiredManifestVersion = status.manifestVersion,
+  viewer: ViewerMonitorSnapshot = {
+    connected: false,
+    lastHeartbeatAt: null,
+    heartbeatAgeSeconds: null,
+    restartsRequested: 0,
+    playback: null,
+  },
 ): Promise<FullTelemetry> {
   const [memory, temperature, throttledMask, chromium, kiosk, software, display, audio, clock] =
     await Promise.all([
@@ -145,6 +154,7 @@ export async function collectSystemTelemetry(
     display,
     audio,
     clock,
+    viewer,
   };
 }
 

@@ -17,12 +17,20 @@ central sin interrumpir la presentación.
   variante de presentación o el póster como fallback sin interrumpir el visor.
 - Conservar preferencias locales, eventos pendientes y el último manifiesto
   funcional después de reinicios o pérdidas de conexión.
+- Recibir latidos y estados del reproductor, registrar sus recuperaciones y
+  verificar/reparar por SHA-256 la copia local de un medio omitido.
 - Exponer al visor operaciones de encuadre, rotación, eliminación, salida y
   apagado controlado.
 - Recopilar diagnóstico acotado sin copiar medios ni secretos.
 
 El navegador nunca se conecta directamente al servidor central ni recibe sus
 credenciales.
+
+El visor consulta cada dos segundos únicamente la versión numérica del
+manifiesto. Sólo vuelve a transferir el JSON completo cuando esa versión
+cambia. El baseline 11 instala `naiskos-viewer-watchdog.service`: tras la
+gracia inicial, una ausencia sostenida de latidos autoriza terminar Chromium;
+el lanzador del kiosco lo abre otra vez sin reiniciar el agente ni el equipo.
 
 El mantenimiento del SO también queda separado del navegador. El baseline 8
 instala helpers root de propósito fijo: seguridad diaria, campaña general,
@@ -242,7 +250,7 @@ Además, el agente envía un heartbeat remoto aproximadamente cada minuto y una
 muestra completa aproximadamente cada cinco minutos. Ambas cadencias llevan
 una dispersión aleatoria de ±10 %; un cambio de estado o error adelanta el
 siguiente heartbeat. La muestra incluye únicamente salud técnica, versiones,
-recursos, sincronización, pantalla, audio y reloj. No incluye nombres de
+recursos, sincronización, pantalla, audio, reloj y salud del visor. No incluye nombres de
 medios, fotografías, videos, miniaturas, capturas ni actividad de personas.
 
 El historial técnico del piloto está en

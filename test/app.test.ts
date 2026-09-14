@@ -209,6 +209,67 @@ describe("agente HTTP", () => {
     await app.close();
   });
 
+  it("recibe latidos y eventos durables del reproductor", async () => {
+    const { app, engine } = await fixture();
+    const playback = {
+      mediaId: "video-1",
+      mediaKind: "video",
+      state: "waiting",
+      currentTime: 9,
+      duration: 12,
+      readyState: 2,
+      networkState: 2,
+      paused: false,
+      ended: false,
+      seeking: false,
+      view: "viewer",
+    };
+    expect((await app.inject({
+      method: "POST",
+      url: "/api/v1/viewer/heartbeat",
+      headers: { "x-naiskos-request": "viewer" },
+      payload: playback,
+    })).statusCode).toBe(204);
+    expect(engine.viewerMonitor.snapshot()).toMatchObject({
+      connected: true,
+      playback: { mediaId: "video-1", state: "waiting" },
+    });
+
+    const event = await app.inject({
+      method: "POST",
+      url: "/api/v1/viewer/playback-events",
+      headers: { "x-naiskos-request": "viewer" },
+      payload: {
+        ...playback,
+        type: "viewer.playback.recovery",
+        reason: "playback-stalled",
+        attempt: 1,
+        mediaSha256: "a".repeat(64),
+        mediaErrorCode: null,
+      },
+    });
+    expect(event.statusCode).toBe(202);
+    const outbox = JSON.parse(
+      await readFile(path.join(engine.manifestFile, "..", "outbox.json"), "utf8"),
+    ) as Array<Record<string, unknown>>;
+    expect(outbox).toEqual([
+      expect.objectContaining({
+        type: "viewer.playback.recovery",
+        mediaId: "video-1",
+        reason: "playback-stalled",
+      }),
+    ]);
+    await app.close();
+  });
+
+  it("expone una versión liviana del manifiesto", async () => {
+    const { app } = await fixture();
+    const response = await app.inject({ method: "GET", url: "/api/v1/manifest/version" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ version: 0 });
+    await app.close();
+  });
+
   it("valida y conserva los resultados del horario de pantalla", async () => {
     const { app, engine } = await fixture();
     const forbidden = await app.inject({

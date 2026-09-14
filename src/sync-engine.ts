@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { createWriteStream } from "node:fs";
-import { access, mkdir, readdir, rename, rm } from "node:fs/promises";
+import { createReadStream, createWriteStream } from "node:fs";
+import { access, mkdir, readdir, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -33,6 +33,7 @@ import {
   telemetryErrorCode,
   type FullTelemetry,
 } from "./telemetry.js";
+import { ViewerMonitor } from "./viewer-monitor.js";
 
 export class SyncEngine {
   readonly manifestFile: string;
@@ -40,6 +41,7 @@ export class SyncEngine {
   readonly weatherFile: string;
   readonly notificationsFile: string;
   status: AgentStatus;
+  readonly viewerMonitor = new ViewerMonitor();
   private running = false;
   private outboxChain: Promise<unknown> = Promise.resolve();
   private manifestChain: Promise<unknown> = Promise.resolve();
@@ -373,6 +375,7 @@ export class SyncEngine {
         this.status,
         await this.pendingOutboxCount(),
         this.desiredManifestVersion,
+        this.viewerMonitor.snapshot(),
       );
     } else if (now >= this.nextHeartbeatAt || signature !== this.lastHeartbeatSignature) {
       this.nextHeartbeatAt = now + jitter(heartbeatInterval);
@@ -432,6 +435,7 @@ export class SyncEngine {
         filename,
         item.sha256,
         token,
+        item.sizeBytes,
       );
       let posterUrl: string | null = null;
       if (item.posterDownloadUrl && item.posterSha256 && item.posterExtension) {
@@ -441,6 +445,7 @@ export class SyncEngine {
           posterFilename,
           item.posterSha256,
           token,
+          item.posterSizeBytes ?? undefined,
         );
         posterUrl = `/media/${posterFilename}`;
       }
@@ -457,6 +462,7 @@ export class SyncEngine {
             thumbnailFilename,
             item.thumbnailSha256,
             token,
+            item.thumbnailSizeBytes ?? undefined,
           );
           thumbnailUrl = `/media/${thumbnailFilename}`;
         } catch (error) {
@@ -594,13 +600,17 @@ export class SyncEngine {
     filename: string,
     expectedHash: string,
     token: string,
+    expectedSize?: number,
+    force = false,
   ): Promise<void> {
     const destination = path.join(this.mediaRoot, filename);
-    try {
-      await access(destination);
-      return;
-    } catch {
-      // El archivo todavía no está en la caché administrada por el agente.
+    if (!force) {
+      try {
+        const details = await stat(destination);
+        if (expectedSize === undefined || details.size === expectedSize) return;
+      } catch {
+        // El archivo todavía no está en la caché administrada por el agente.
+      }
     }
     const temporary = `${destination}.${process.pid}.part`;
     const response = await fetch(url, {
@@ -623,6 +633,45 @@ export class SyncEngine {
     }
   }
 
+  async inspectAndRepairMedia(
+    mediaId: string,
+  ): Promise<"valid" | "repaired" | "missing"> {
+    const local = this.manifest.media.find((item) => item.id === mediaId);
+    if (!local) return "missing";
+    const destination = path.join(this.mediaRoot, path.basename(local.url));
+    try {
+      const details = await stat(destination);
+      if (details.size === local.sizeBytes && (await sha256File(destination)) === local.sha256) {
+        return "valid";
+      }
+    } catch {
+      // Se intentará reconstruir desde la copia central.
+    }
+
+    const { frameId, centralUrl, token } = this.config;
+    if (!frameId || !centralUrl || !token) return "missing";
+    const response = await fetch(
+      `${centralUrl}/api/v1/frames/${encodeURIComponent(frameId)}/manifest`,
+      {
+        headers: { authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(20_000),
+      },
+    );
+    if (!response.ok) throw new Error(`Central respondió HTTP ${response.status}`);
+    const remote = validateRemoteManifest(await response.json(), frameId);
+    const source = remote.media.find((item) => item.id === mediaId);
+    if (!source || source.sha256 !== local.sha256) return "missing";
+    await this.downloadIfMissing(
+      source.downloadUrl,
+      path.basename(local.url),
+      source.sha256,
+      token,
+      source.sizeBytes,
+      true,
+    );
+    return "repaired";
+  }
+
   private async refreshStorageUsage(forceDataScan = false): Promise<void> {
     await mkdir(this.config.dataRoot, { recursive: true });
     Object.assign(this.status, await collectFileSystemUsage(this.config.dataRoot));
@@ -634,6 +683,12 @@ export class SyncEngine {
       this.nextDataUsageScanAt = Date.now() + 5 * 60_000;
     }
   }
+}
+
+async function sha256File(filename: string): Promise<string> {
+  const hash = createHash("sha256");
+  await pipeline(createReadStream(filename), hash);
+  return hash.digest("hex");
 }
 
 function jitter(intervalMs: number): number {
