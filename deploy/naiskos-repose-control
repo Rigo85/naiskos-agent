@@ -1,0 +1,17 @@
+#!/bin/sh
+
+set -eu
+
+case "${1:-}" in
+  enter) active=true ;;
+  exit) active=false ;;
+  *) echo "Uso: naiskos-repose-control enter|exit" >&2; exit 2 ;;
+esac
+
+url="${NAISKOS_REPOSE_URL:-http://127.0.0.1:8080/api/v1/system/repose}"
+/usr/bin/curl --fail --silent --show-error --max-time 8 \
+  --retry 2 --retry-delay 2 --retry-connrefused --retry-all-errors \
+  -H 'Content-Type: application/json' \
+  -H 'X-Naiskos-Request: scheduler' \
+  -d "{\"active\":${active}}" \
+  "${url}" >/dev/null

@@ -11,6 +11,7 @@ import { FitMode } from "./types.js";
 import { normalizeSettings } from "./validation.js";
 import { errorForLog } from "./logging.js";
 import type { ViewerPlaybackSnapshot, ViewerPlaybackState } from "./viewer-monitor.js";
+import { ReposeManager } from "./repose.js";
 
 type SystemAction = "exit" | "poweroff";
 type DisplayScheduleEvent =
@@ -30,6 +31,7 @@ export async function buildApp(
   config: AgentConfig,
   engine: SyncEngine,
   provisioning?: ProvisioningManager,
+  repose?: ReposeManager,
 ): Promise<FastifyInstance> {
   const app = Fastify({
     logger: {
@@ -74,6 +76,29 @@ export async function buildApp(
   });
 
   app.get("/api/v1/health", async () => ({ ok: true, ...engine.status }));
+  app.get("/api/v1/repose", async (_request, reply) =>
+    repose ? repose.current() : reply.code(503).send({ error: "Reposo no disponible" }),
+  );
+  app.post<{ Body: { active?: boolean } }>("/api/v1/repose", async (request, reply) => {
+    if (request.headers["x-naiskos-request"] !== "viewer") {
+      return reply.code(403).send({ error: "Solicitud local inválida" });
+    }
+    if (!repose) return reply.code(503).send({ error: "Reposo no disponible" });
+    if (typeof request.body?.active !== "boolean") {
+      return reply.code(400).send({ error: "Estado de reposo inválido" });
+    }
+    return repose.setManual(request.body.active);
+  });
+  app.post<{ Body: { active?: boolean } }>("/api/v1/system/repose", async (request, reply) => {
+    if (request.headers["x-naiskos-request"] !== "scheduler") {
+      return reply.code(403).send({ error: "Solicitud local inválida" });
+    }
+    if (!repose) return reply.code(503).send({ error: "Reposo no disponible" });
+    if (typeof request.body?.active !== "boolean") {
+      return reply.code(400).send({ error: "Estado de reposo inválido" });
+    }
+    return repose.setScheduled(request.body.active);
+  });
   app.get("/api/v1/provisioning", async () =>
     provisioning
       ? provisioning.status
@@ -575,7 +600,7 @@ export async function buildApp(
 }
 
 const VIEWER_STATES = new Set<ViewerPlaybackState>([
-  "empty", "photo", "loading", "playing", "paused", "waiting", "recovering", "error",
+  "empty", "photo", "loading", "playing", "paused", "waiting", "recovering", "repose", "error",
 ]);
 
 function viewerSnapshot(value: unknown): ViewerPlaybackSnapshot | null {
@@ -590,7 +615,7 @@ function viewerSnapshot(value: unknown): ViewerPlaybackSnapshot | null {
     !(mediaId === null || (typeof mediaId === "string" && mediaId.length <= 128)) ||
     !(mediaKind === null || mediaKind === "photo" || mediaKind === "video") ||
     typeof state !== "string" || !VIEWER_STATES.has(state as ViewerPlaybackState) ||
-    (view !== "viewer" && view !== "overlay") ||
+    (view !== "viewer" && view !== "overlay" && view !== "repose") ||
     numbers.some((number) => typeof number !== "number" || !Number.isFinite(number) || number < 0) ||
     typeof body.paused !== "boolean" || typeof body.ended !== "boolean" ||
     typeof body.seeking !== "boolean"

@@ -17,6 +17,7 @@ import {
 import { emptyManifest } from "./validation.js";
 import { errorForLog } from "./logging.js";
 import { SoftwareUpdateManager } from "./software-update.js";
+import { ReposeManager } from "./repose.js";
 
 const config = loadConfig();
 await loadProvisionedCredentials(config);
@@ -35,13 +36,20 @@ const notifications =
 await writeJsonAtomic(notificationsFile, notifications);
 
 const engine = new SyncEngine(config, manifest, weather, notifications);
+const repose = await ReposeManager.create(
+  config.dataRoot,
+  (event) => engine.enqueueEvent(event),
+  config.reposeFrom,
+  config.reposeUntil,
+);
+engine.setReposeStateProvider(() => repose.current());
 const softwareUpdates = new SoftwareUpdateManager(config, (event) =>
   engine.enqueueEvent(event),
 );
 const provisioning = new ProvisioningManager(config, (frameId) =>
   engine.configure(frameId),
 );
-const app = await buildApp(config, engine, provisioning);
+const app = await buildApp(config, engine, provisioning, repose);
 await app.listen({ host: config.host, port: config.port });
 
 void provisioning

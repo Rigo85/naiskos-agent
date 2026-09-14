@@ -34,6 +34,7 @@ import {
   type FullTelemetry,
 } from "./telemetry.js";
 import { ViewerMonitor } from "./viewer-monitor.js";
+import type { ReposeState } from "./repose.js";
 
 export class SyncEngine {
   readonly manifestFile: string;
@@ -51,6 +52,7 @@ export class SyncEngine {
   private nextFullTelemetryAt = 0;
   private desiredManifestVersion: number;
   private lastHeartbeatSignature = "";
+  private reposeStateProvider: () => ReposeState | null = () => null;
 
   constructor(
     private readonly config: AgentConfig,
@@ -97,6 +99,10 @@ export class SyncEngine {
 
   currentManifest(): LocalManifest {
     return this.manifest;
+  }
+
+  setReposeStateProvider(provider: () => ReposeState | null): void {
+    this.reposeStateProvider = provider;
   }
 
   currentWeather(): WeatherSnapshot {
@@ -376,6 +382,7 @@ export class SyncEngine {
         await this.pendingOutboxCount(),
         this.desiredManifestVersion,
         this.viewerMonitor.snapshot(),
+        this.reposeStateProvider(),
       );
     } else if (now >= this.nextHeartbeatAt || signature !== this.lastHeartbeatSignature) {
       this.nextHeartbeatAt = now + jitter(heartbeatInterval);

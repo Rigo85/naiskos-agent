@@ -6,6 +6,7 @@ export type ViewerPlaybackState =
   | "paused"
   | "waiting"
   | "recovering"
+  | "repose"
   | "error";
 
 export interface ViewerPlaybackSnapshot {
@@ -19,7 +20,7 @@ export interface ViewerPlaybackSnapshot {
   paused: boolean;
   ended: boolean;
   seeking: boolean;
-  view: "viewer" | "overlay";
+  view: "viewer" | "overlay" | "repose";
 }
 
 export interface ViewerMonitorSnapshot {

@@ -7,6 +7,7 @@ import { buildApp } from "../src/app.js";
 import { AgentConfig } from "../src/config.js";
 import { SyncEngine } from "../src/sync-engine.js";
 import { emptyManifest } from "../src/validation.js";
+import { ReposeManager } from "../src/repose.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -39,11 +40,33 @@ async function fixture() {
     diskBlockPercent: 90,
   };
   const engine = new SyncEngine(config, emptyManifest());
-  const app = await buildApp(config, engine);
-  return { app, engine };
+  const repose = await ReposeManager.create(dataRoot, (event) => engine.enqueueEvent(event));
+  const app = await buildApp(config, engine, undefined, repose);
+  return { app, engine, repose };
 }
 
 describe("agente HTTP", () => {
+  it("controla el reposo con orígenes local y programado protegidos", async () => {
+    const { app } = await fixture();
+    expect((await app.inject({ method: "GET", url: "/api/v1/repose" })).statusCode).toBe(200);
+    expect((await app.inject({ method: "POST", url: "/api/v1/repose", payload: { active: true } })).statusCode).toBe(403);
+    const entered = await app.inject({
+      method: "POST",
+      url: "/api/v1/repose",
+      headers: { "x-naiskos-request": "viewer" },
+      payload: { active: true },
+    });
+    expect(entered.statusCode).toBe(200);
+    expect(entered.json()).toMatchObject({ active: true, source: "manual" });
+    expect((await app.inject({
+      method: "POST",
+      url: "/api/v1/system/repose",
+      headers: { "x-naiskos-request": "scheduler" },
+      payload: { active: false },
+    })).statusCode).toBe(200);
+    await app.close();
+  });
+
   it("adopta el frameId real sin borrar el demo y reinicia su versión local", async () => {
     const { app, engine } = await fixture();
     await engine.replaceManifest({

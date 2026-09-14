@@ -20,6 +20,8 @@ export interface AgentConfig {
   diskBlockPercent: number;
   softwareCheckIntervalMs: number;
   releasePublicKeyPath: string;
+  reposeFrom?: string;
+  reposeUntil?: string;
 }
 
 function integer(
@@ -90,5 +92,7 @@ export function loadConfig(): AgentConfig {
     releasePublicKeyPath:
       process.env.NAISKOS_RELEASE_PUBLIC_KEY_PATH ??
       "/etc/naiskos/release-signing-public.pem",
+    reposeFrom: process.env.NAISKOS_REPOSE_FROM ?? "23:30",
+    reposeUntil: process.env.NAISKOS_REPOSE_UNTIL ?? "07:00",
   };
 }

@@ -20,7 +20,7 @@ central sin interrumpir la presentación.
 - Recibir latidos y estados del reproductor, registrar sus recuperaciones y
   verificar/reparar por SHA-256 la copia local de un medio omitido.
 - Exponer al visor operaciones de encuadre, rotación, eliminación, salida y
-  apagado controlado.
+  apagado controlado, además del reposo local persistente.
 - Recopilar diagnóstico acotado sin copiar medios ni secretos.
 
 El navegador nunca se conecta directamente al servidor central ni recibe sus
@@ -31,6 +31,10 @@ manifiesto. Sólo vuelve a transferir el JSON completo cuando esa versión
 cambia. El baseline 11 instala `naiskos-viewer-watchdog.service`: tras la
 gracia inicial, una ausencia sostenida de latidos autoriza terminar Chromium;
 el lanzador del kiosco lo abre otra vez sin reiniciar el agente ni el equipo.
+El baseline 12 reemplaza el corte HDMI programado por un reposo visual: el
+agente conserva el estado en disco, Angular mantiene sus latidos y muestra
+hora, fecha y clima. El watchdog ignora procesos Chromium detenidos y aplica
+una gracia de 60 segundos al reaparecer, evitando recuperaciones falsas.
 
 El mantenimiento del SO también queda separado del navegador. El baseline 8
 instala helpers root de propósito fijo: seguridad diaria, campaña general,
