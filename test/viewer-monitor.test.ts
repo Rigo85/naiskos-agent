@@ -14,6 +14,15 @@ const playback: ViewerPlaybackSnapshot = {
   ended: false,
   seeking: false,
   view: "viewer",
+  navigation: {
+    phase: "stable",
+    operationId: null,
+    candidateMediaId: null,
+    candidateMediaSha256: null,
+    phaseElapsedMs: 0,
+    deadlineMs: null,
+    failuresInOperation: 0,
+  },
 };
 
 describe("monitor del visor", () => {
@@ -32,5 +41,45 @@ describe("monitor del visor", () => {
     });
     expect(monitor.claimRestart(start + 245_000)).toBe(false);
     expect(monitor.claimRestart(start + 245_001)).toBe(true);
+  });
+
+  it("reinicia un visor que sigue latiendo pero excedió el plazo de navegación", () => {
+    const start = Date.parse("2026-09-15T12:00:00.000Z");
+    const monitor = new ViewerMonitor(start);
+    monitor.record({
+      ...playback,
+      mediaKind: "photo",
+      state: "photo",
+      navigation: {
+        phase: "staging",
+        operationId: 42,
+        candidateMediaId: "photo-bad",
+        candidateMediaSha256: "a".repeat(64),
+        phaseElapsedMs: 20_001,
+        deadlineMs: 5_000,
+        failuresInOperation: 1,
+      },
+    }, start + 1_000);
+    expect(monitor.claimRestart(start + 1_001)).toBe(true);
+  });
+
+  it("no interpreta el reposo ni una navegación dentro de plazo como bloqueo", () => {
+    const start = Date.parse("2026-09-15T12:00:00.000Z");
+    const monitor = new ViewerMonitor(start);
+    monitor.record({
+      ...playback,
+      state: "repose",
+      view: "repose",
+      navigation: {
+        phase: "staging",
+        operationId: 7,
+        candidateMediaId: "video-2",
+        candidateMediaSha256: "b".repeat(64),
+        phaseElapsedMs: 60_000,
+        deadlineMs: 5_000,
+        failuresInOperation: 0,
+      },
+    }, start + 1_000);
+    expect(monitor.claimRestart(start + 1_001)).toBe(false);
   });
 });

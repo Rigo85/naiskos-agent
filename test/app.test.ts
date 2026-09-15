@@ -285,6 +285,35 @@ describe("agente HTTP", () => {
     await app.close();
   });
 
+  it("recibe fallos genéricos al preparar fotos o videos", async () => {
+    const { app, engine } = await fixture();
+    const event = await app.inject({
+      method: "POST",
+      url: "/api/v1/viewer/media-events",
+      headers: { "x-naiskos-request": "viewer" },
+      payload: {
+        type: "viewer.media.preparation-failed",
+        mediaId: "photo-2",
+        mediaKind: "photo",
+        mediaSha256: "a".repeat(64),
+        reason: "La fotografía no se pudo decodificar.",
+        manifestVersion: 12,
+        operationId: 8,
+        elapsedMs: 5010,
+      },
+    });
+    expect(event.statusCode).toBe(202);
+    const outbox = JSON.parse(
+      await readFile(path.join(engine.manifestFile, "..", "outbox.json"), "utf8"),
+    ) as Array<Record<string, unknown>>;
+    expect(outbox).toContainEqual(expect.objectContaining({
+      type: "viewer.media.preparation-failed",
+      mediaId: "photo-2",
+      operationId: 8,
+    }));
+    await app.close();
+  });
+
   it("expone una versión liviana del manifiesto", async () => {
     const { app } = await fixture();
     const response = await app.inject({ method: "GET", url: "/api/v1/manifest/version" });

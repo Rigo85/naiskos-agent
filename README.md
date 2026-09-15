@@ -26,6 +26,13 @@ central sin interrumpir la presentación.
 El navegador nunca se conecta directamente al servidor central ni recibe sus
 credenciales.
 
+El monitor del visor evalúa dos señales distintas: la llegada de latidos y el
+progreso declarado por el coordinador de navegación. Puede reiniciar sólo
+Chromium si una preparación o transición excede su deadline aunque el proceso
+siga enviando latidos. El reposo queda excluido. Los fallos de cualquier foto o
+video se escriben primero en el outbox durable y fuerzan una reconstrucción
+atómica desde la copia central.
+
 El visor consulta cada dos segundos únicamente la versión numérica del
 manifiesto. Sólo vuelve a transferir el JSON completo cuando esa versión
 cambia. El baseline 11 instala `naiskos-viewer-watchdog.service`: tras la

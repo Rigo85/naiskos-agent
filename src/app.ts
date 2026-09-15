@@ -371,6 +371,39 @@ export async function buildApp(
     void engine.sync().catch(() => undefined);
     return reply.code(202).send({ accepted: true, id });
   });
+  app.post<{ Body: unknown }>("/api/v1/viewer/media-events", async (request, reply) => {
+    if (request.headers["x-naiskos-request"] !== "viewer") {
+      return reply.code(403).send({ error: "Solicitud local inválida" });
+    }
+    const body = mediaPreparationEvent(request.body);
+    if (!body) return reply.code(400).send({ error: "Evento de medio inválido" });
+    const id = await engine.enqueueEvent({ ...body, at: new Date().toISOString() });
+    void engine.inspectAndRepairMedia(body.mediaId, true).then(
+      async (result) => {
+        await engine.enqueueEvent({
+          type: "viewer.media.integrity",
+          at: new Date().toISOString(),
+          mediaId: body.mediaId,
+          mediaSha256: body.mediaSha256,
+          result,
+        });
+        void engine.sync().catch(() => undefined);
+      },
+      async (error: unknown) => {
+        await engine.enqueueEvent({
+          type: "viewer.media.integrity",
+          at: new Date().toISOString(),
+          mediaId: body.mediaId,
+          mediaSha256: body.mediaSha256,
+          result: "failed",
+          error: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500),
+        });
+        void engine.sync().catch(() => undefined);
+      },
+    );
+    void engine.sync().catch(() => undefined);
+    return reply.code(202).send({ accepted: true, id });
+  });
   app.get("/api/v1/weather", async () => engine.currentWeather());
   app.get("/api/v1/notifications", async () => ({
     notifications: engine.currentNotifications(),
@@ -611,6 +644,7 @@ function viewerSnapshot(value: unknown): ViewerPlaybackSnapshot | null {
   const state = body.state;
   const view = body.view;
   const numbers = [body.currentTime, body.duration, body.readyState, body.networkState];
+  const navigation = viewerNavigationSnapshot(body.navigation);
   if (
     !(mediaId === null || (typeof mediaId === "string" && mediaId.length <= 128)) ||
     !(mediaKind === null || mediaKind === "photo" || mediaKind === "video") ||
@@ -618,7 +652,7 @@ function viewerSnapshot(value: unknown): ViewerPlaybackSnapshot | null {
     (view !== "viewer" && view !== "overlay" && view !== "repose") ||
     numbers.some((number) => typeof number !== "number" || !Number.isFinite(number) || number < 0) ||
     typeof body.paused !== "boolean" || typeof body.ended !== "boolean" ||
-    typeof body.seeking !== "boolean"
+    typeof body.seeking !== "boolean" || !navigation
   ) return null;
   return {
     mediaId: mediaId as string | null,
@@ -632,6 +666,76 @@ function viewerSnapshot(value: unknown): ViewerPlaybackSnapshot | null {
     ended: body.ended as boolean,
     seeking: body.seeking as boolean,
     view,
+    navigation,
+  };
+}
+
+function viewerNavigationSnapshot(value: unknown): ViewerPlaybackSnapshot["navigation"] | null {
+  if (value === undefined) {
+    return {
+      phase: "stable",
+      operationId: null,
+      candidateMediaId: null,
+      candidateMediaSha256: null,
+      phaseElapsedMs: 0,
+      deadlineMs: null,
+      failuresInOperation: 0,
+    };
+  }
+  if (!value || typeof value !== "object") return null;
+  const body = value as Record<string, unknown>;
+  const phases = new Set(["stable", "staging", "transitioning", "degraded"]);
+  if (
+    typeof body.phase !== "string" || !phases.has(body.phase) ||
+    !(body.operationId === null || (Number.isSafeInteger(body.operationId) && Number(body.operationId) >= 0)) ||
+    !(body.candidateMediaId === null || (typeof body.candidateMediaId === "string" && body.candidateMediaId.length <= 128)) ||
+    !(body.candidateMediaSha256 === null || (typeof body.candidateMediaSha256 === "string" && /^[a-f0-9]{1,64}$/i.test(body.candidateMediaSha256))) ||
+    typeof body.phaseElapsedMs !== "number" || !Number.isFinite(body.phaseElapsedMs) || body.phaseElapsedMs < 0 ||
+    !(body.deadlineMs === null || (typeof body.deadlineMs === "number" && Number.isFinite(body.deadlineMs) && body.deadlineMs >= 0)) ||
+    !Number.isSafeInteger(body.failuresInOperation) || Number(body.failuresInOperation) < 0
+  ) return null;
+  return {
+    phase: body.phase as ViewerPlaybackSnapshot["navigation"]["phase"],
+    operationId: body.operationId as number | null,
+    candidateMediaId: body.candidateMediaId as string | null,
+    candidateMediaSha256: body.candidateMediaSha256 as string | null,
+    phaseElapsedMs: body.phaseElapsedMs,
+    deadlineMs: body.deadlineMs as number | null,
+    failuresInOperation: Number(body.failuresInOperation),
+  };
+}
+
+function mediaPreparationEvent(value: unknown): {
+  type: "viewer.media.preparation-failed";
+  mediaId: string;
+  mediaKind: "photo" | "video";
+  mediaSha256: string;
+  reason: string;
+  manifestVersion: number | null;
+  operationId: number;
+  elapsedMs: number;
+} | null {
+  if (!value || typeof value !== "object") return null;
+  const body = value as Record<string, unknown>;
+  if (
+    body.type !== "viewer.media.preparation-failed" ||
+    typeof body.mediaId !== "string" || body.mediaId.length < 1 || body.mediaId.length > 128 ||
+    (body.mediaKind !== "photo" && body.mediaKind !== "video") ||
+    typeof body.mediaSha256 !== "string" || !/^[a-f0-9]{1,64}$/i.test(body.mediaSha256) ||
+    typeof body.reason !== "string" || body.reason.length < 1 || body.reason.length > 160 ||
+    !(body.manifestVersion === null || (Number.isSafeInteger(body.manifestVersion) && Number(body.manifestVersion) >= 0)) ||
+    !Number.isSafeInteger(body.operationId) || Number(body.operationId) < 0 ||
+    typeof body.elapsedMs !== "number" || !Number.isFinite(body.elapsedMs) || body.elapsedMs < 0
+  ) return null;
+  return {
+    type: body.type,
+    mediaId: body.mediaId,
+    mediaKind: body.mediaKind,
+    mediaSha256: body.mediaSha256,
+    reason: body.reason,
+    manifestVersion: body.manifestVersion as number | null,
+    operationId: Number(body.operationId),
+    elapsedMs: body.elapsedMs,
   };
 }
 

@@ -21,6 +21,17 @@ export interface ViewerPlaybackSnapshot {
   ended: boolean;
   seeking: boolean;
   view: "viewer" | "overlay" | "repose";
+  navigation: ViewerNavigationSnapshot;
+}
+
+export interface ViewerNavigationSnapshot {
+  phase: "stable" | "staging" | "transitioning" | "degraded";
+  operationId: number | null;
+  candidateMediaId: string | null;
+  candidateMediaSha256: string | null;
+  phaseElapsedMs: number;
+  deadlineMs: number | null;
+  failuresInOperation: number;
 }
 
 export interface ViewerMonitorSnapshot {
@@ -34,6 +45,7 @@ export interface ViewerMonitorSnapshot {
 const STARTUP_GRACE_MS = 120_000;
 const HEARTBEAT_STALE_MS = 45_000;
 const RESTART_COOLDOWN_MS = 120_000;
+const NAVIGATION_DEADLINE_GRACE_MS = 15_000;
 
 export class ViewerMonitor {
   private readonly startedAt: number;
@@ -54,7 +66,17 @@ export class ViewerMonitor {
   claimRestart(now = Date.now()): boolean {
     const reference = this.lastHeartbeatAt ?? this.startedAt;
     const staleAfter = this.lastHeartbeatAt === null ? STARTUP_GRACE_MS : HEARTBEAT_STALE_MS;
-    if (now - reference <= staleAfter) return false;
+    const heartbeatStale = now - reference > staleAfter;
+    const navigation = this.playback?.navigation;
+    const navigationStuck = Boolean(
+      this.lastHeartbeatAt !== null &&
+      now - this.lastHeartbeatAt <= HEARTBEAT_STALE_MS &&
+      this.playback?.view === "viewer" &&
+      (navigation?.phase === "staging" || navigation?.phase === "transitioning") &&
+      navigation.deadlineMs !== null &&
+      navigation.phaseElapsedMs > navigation.deadlineMs + NAVIGATION_DEADLINE_GRACE_MS,
+    );
+    if (!heartbeatStale && !navigationStuck) return false;
     if (this.lastRestartAt !== null && now - this.lastRestartAt <= RESTART_COOLDOWN_MS) return false;
     this.lastRestartAt = now;
     this.restartsRequested += 1;
