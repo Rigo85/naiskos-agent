@@ -30,6 +30,50 @@ afterEach(async () => {
 });
 
 describe("sincronización del agente", () => {
+  it("no vuelve a descargar un medio local cuyo tamaño y hash son válidos", async () => {
+    const dataRoot = await mkdtemp(path.join(os.tmpdir(), "naiskos-media-valid-"));
+    temporaryDirectories.push(dataRoot);
+    const frameId = "11111111-1111-4111-8111-111111111111";
+    const content = Buffer.from("contenido-válido");
+    const hash = createHash("sha256").update(content).digest("hex");
+    const filename = `${hash}.webp`;
+    await mkdir(path.join(dataRoot, "media"), { recursive: true });
+    await writeFile(path.join(dataRoot, "media", filename), content);
+    const config = {
+      host: "127.0.0.1", port: 8080, dataRoot, webRoot: dataRoot,
+      centralUrl: "https://naiskos.test", frameId, token: "token",
+      telegramBotUsername: "naiskosbot", deviceBootstrapToken: null,
+      deviceName: null, frameWidth: 1280, frameHeight: 800, syncIntervalMs: 5_000,
+      weatherSyncIntervalMs: 60_000, diskBlockPercent: 90,
+    } satisfies AgentConfig;
+    const local = {
+      ...emptyManifest(frameId),
+      media: [{
+        id: "photo-1",
+        kind: "photo" as const,
+        url: `/media/${filename}`,
+        posterUrl: null,
+        thumbnailUrl: null,
+        caption: null,
+        senderName: null,
+        receivedAt: new Date().toISOString(),
+        fitMode: "inherit" as const,
+        rotationDegrees: 0 as const,
+        durationSeconds: null,
+        sha256: hash,
+        sizeBytes: content.length,
+        posterSizeBytes: null,
+        thumbnailSizeBytes: null,
+      }],
+    };
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const engine = new SyncEngine(config, local);
+
+    await expect(engine.inspectAndRepairMedia("photo-1")).resolves.toBe("valid");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("reemplaza una copia local cuyo tamaño no coincide con el manifiesto", async () => {
     const dataRoot = await mkdtemp(path.join(os.tmpdir(), "naiskos-media-size-"));
     temporaryDirectories.push(dataRoot);

@@ -640,16 +640,13 @@ export class SyncEngine {
     }
   }
 
-  async inspectAndRepairMedia(
-    mediaId: string,
-    forceRefresh = false,
-  ): Promise<"valid" | "repaired" | "missing"> {
+  async inspectAndRepairMedia(mediaId: string): Promise<"valid" | "repaired" | "missing"> {
     const local = this.manifest.media.find((item) => item.id === mediaId);
     if (!local) return "missing";
     const destination = path.join(this.mediaRoot, path.basename(local.url));
     try {
       const details = await stat(destination);
-      if (!forceRefresh && details.size === local.sizeBytes && (await sha256File(destination)) === local.sha256) {
+      if (details.size === local.sizeBytes && (await sha256File(destination)) === local.sha256) {
         return "valid";
       }
     } catch {

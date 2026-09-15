@@ -62,6 +62,27 @@ export async function buildApp(
     sequence: 0,
     action: "none",
   };
+  const inspectAndReportMedia = async (mediaId: string, mediaSha256: string | null) => {
+    try {
+      const result = await engine.inspectAndRepairMedia(mediaId);
+      await engine.enqueueEvent({
+        type: "viewer.media.integrity",
+        at: new Date().toISOString(),
+        mediaId,
+        mediaSha256,
+        result,
+      });
+    } catch (error: unknown) {
+      await engine.enqueueEvent({
+        type: "viewer.media.integrity",
+        at: new Date().toISOString(),
+        mediaId,
+        mediaSha256,
+        result: "failed",
+        error: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500),
+      });
+    }
+  };
 
   app.addHook("onError", async (request, _reply, error) => {
     request.log.error({ err: error }, "Petición local fallida");
@@ -345,28 +366,7 @@ export async function buildApp(
     engine.viewerMonitor.record(body);
     const id = await engine.enqueueEvent({ ...body, at: new Date().toISOString() });
     if (body.type === "viewer.playback.skipped" && body.mediaId) {
-      void engine.inspectAndRepairMedia(body.mediaId).then(
-        async (result) => {
-          await engine.enqueueEvent({
-            type: "viewer.media.integrity",
-            at: new Date().toISOString(),
-            mediaId: body.mediaId,
-            mediaSha256: body.mediaSha256,
-            result,
-          });
-          void engine.sync().catch(() => undefined);
-        },
-        async (error: unknown) => {
-          await engine.enqueueEvent({
-            type: "viewer.media.integrity",
-            at: new Date().toISOString(),
-            mediaId: body.mediaId,
-            mediaSha256: body.mediaSha256,
-            result: "failed",
-            error: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500),
-          });
-        },
-      );
+      await inspectAndReportMedia(body.mediaId, body.mediaSha256);
     }
     void engine.sync().catch(() => undefined);
     return reply.code(202).send({ accepted: true, id });
@@ -378,29 +378,7 @@ export async function buildApp(
     const body = mediaPreparationEvent(request.body);
     if (!body) return reply.code(400).send({ error: "Evento de medio inválido" });
     const id = await engine.enqueueEvent({ ...body, at: new Date().toISOString() });
-    void engine.inspectAndRepairMedia(body.mediaId, true).then(
-      async (result) => {
-        await engine.enqueueEvent({
-          type: "viewer.media.integrity",
-          at: new Date().toISOString(),
-          mediaId: body.mediaId,
-          mediaSha256: body.mediaSha256,
-          result,
-        });
-        void engine.sync().catch(() => undefined);
-      },
-      async (error: unknown) => {
-        await engine.enqueueEvent({
-          type: "viewer.media.integrity",
-          at: new Date().toISOString(),
-          mediaId: body.mediaId,
-          mediaSha256: body.mediaSha256,
-          result: "failed",
-          error: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500),
-        });
-        void engine.sync().catch(() => undefined);
-      },
-    );
+    await inspectAndReportMedia(body.mediaId, body.mediaSha256);
     void engine.sync().catch(() => undefined);
     return reply.code(202).send({ accepted: true, id });
   });
