@@ -10,6 +10,10 @@ export type ViewerPlaybackState =
   | "error";
 
 export interface ViewerPlaybackSnapshot {
+  buildId?: string;
+  sessionId?: string;
+  uiReady?: boolean;
+  quiescedFor?: string | null;
   mediaId: string | null;
   mediaKind: "photo" | "video" | null;
   state: ViewerPlaybackState;

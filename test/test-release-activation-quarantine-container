@@ -26,6 +26,10 @@ cleanup
 mkdir -p /etc/naiskos /opt/naiskos/bin /opt/naiskos/releases "$updates/$release"
 cp "$agent_root/deploy/naiskos-release-activate" /opt/naiskos/bin/naiskos-release-activate
 chmod 0755 /opt/naiskos/bin/naiskos-release-activate
+mkdir -p /opt/node24/bin
+ln -s "$(command -v node)" /opt/node24/bin/node
+printf '%s\n' 'process.exit(0);' > /opt/naiskos/bin/naiskos-release-runtime.mjs
+printf '%s\n' 'process.exit(0);' > /opt/naiskos/bin/naiskos-kiosk-control.mjs
 printf '%s\n' '{}' > /etc/naiskos/baseline.json
 printf '%s\n' 'public-key-test' > /etc/naiskos/release-signing-public.pem
 printf '%s\n' '{}' > "$manifest"

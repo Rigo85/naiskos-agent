@@ -143,13 +143,8 @@ if (command === "verify-request") {
 } else if (command === "report") {
   const [campaignId, releaseId, status, error = ""] = args;
   if (!uuidPattern(campaignId ?? "") || !releaseIdPattern(releaseId ?? "")) fail("Reporte inválido");
-  const response = await fetch("http://127.0.0.1:8080/api/v1/system/release-events", {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-naiskos-request": "release-activator" },
-    body: JSON.stringify({ campaignId, releaseId, status, ...(error ? { error } : {}) }),
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!response.ok) fail(`Reporte HTTP ${response.status}`);
+  const { queueReport } = await import('./naiskos-release-runtime.mjs');
+  await queueReport(campaignId, releaseId, status, error);
 } else if (command === "report-system") {
   const count = Number(args[0]);
   const rebootRequired = args[1] === "true";

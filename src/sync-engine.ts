@@ -198,8 +198,12 @@ export class SyncEngine {
       const file = path.join(this.config.dataRoot, "outbox.json");
       const events =
         (await readJson<Array<Record<string, unknown>>>(file)) ?? [];
-      events.push({ id, ...event });
-      await writeJsonAtomic(file, events.slice(-1_000));
+      if (!events.some((entry) => entry.id === id)) events.push({ id, ...event });
+      // Release results must survive ordinary telemetry bursts while offline.
+      const cutoff = events.length - 1_000;
+      await writeJsonAtomic(file, events.filter((entry, index) =>
+        index >= cutoff || entry.type === "software.release.status",
+      ));
     });
     return id;
   }

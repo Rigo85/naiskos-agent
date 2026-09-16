@@ -268,6 +268,12 @@ El historial técnico del piloto está en
 [`docs/piloto-rpi-2026-08-29.md`](docs/piloto-rpi-2026-08-29.md); no sustituye la
 validación del hardware concreto donde vaya a instalarse.
 
+## Reinicio y verificación del kiosco
+
+El contrato de salud funcional, cierre controlado y observación de releases
+del baseline 13 está en [docs/functional-runtime.md](docs/functional-runtime.md).
+Incluye los límites de la recuperación automática ante bloqueos del kernel.
+
 ## Licencia
 
 Naiskos Agent se distribuye bajo la

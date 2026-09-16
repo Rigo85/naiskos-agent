@@ -1,0 +1,11 @@
+[Unit]
+Description=Completa la primera activación desde el activador anterior
+After=naiskos-agent.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/naiskos/agent.env
+ExecStartPre=/opt/node24/bin/node /opt/naiskos/bin/naiskos-kiosk-control.mjs stop
+ExecStart=/usr/bin/flock -w 300 /run/naiskos-release-activate.lock /opt/node24/bin/node /opt/naiskos/bin/naiskos-release-runtime.mjs handoff
+TimeoutStartSec=90s
+TimeoutStopSec=10s

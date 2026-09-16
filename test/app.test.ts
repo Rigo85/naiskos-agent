@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -42,10 +42,82 @@ async function fixture() {
   const engine = new SyncEngine(config, emptyManifest());
   const repose = await ReposeManager.create(dataRoot, (event) => engine.enqueueEvent(event));
   const app = await buildApp(config, engine, undefined, repose);
-  return { app, engine, repose };
+  return { app, engine, repose, config };
 }
 
 describe("agente HTTP", () => {
+  it("exige identidad del visor, respeta reposo y confirma la liberación antes de reiniciar", async () => {
+    const { app, engine } = await fixture();
+    const snapshot = { buildId: "development", sessionId: "session-1", uiReady: true,
+      mediaId: null, mediaKind: null, state: "repose", currentTime: 0, duration: 0,
+      readyState: 0, networkState: 0, paused: true, ended: false, seeking: false, view: "repose" };
+    const beat = (payload: object) => app.inject({ method: "POST", url: "/api/v1/viewer/heartbeat",
+      headers: { "x-naiskos-request": "viewer" }, payload });
+    const runtime = async () => (await app.inject({ method: "GET", url: "/api/v1/viewer/runtime" })).json();
+    expect((await runtime()).ready).toBe(false);
+    await beat(snapshot);
+    expect((await runtime()).ready).toBe(true);
+    await beat({ ...snapshot, buildId: "otra-release" });
+    expect((await runtime()).ready).toBe(false);
+    await beat(snapshot);
+    expect((await app.inject({ method: "POST", url: "/api/v1/system/quiesce" })).statusCode).toBe(403);
+    const command = (await app.inject({ method: "POST", url: "/api/v1/system/quiesce",
+      headers: { "x-naiskos-request": "release-activator" } })).json();
+    expect((await runtime()).ready).toBe(false);
+    await beat({ ...snapshot, uiReady: false, quiescedFor: command.quiesceId });
+    expect(engine.viewerMonitor.snapshot().playback?.quiescedFor).toBe(command.quiesceId);
+    await app.close();
+  });
+
+  it("persiste Salir, ignora un heartbeat tardío y lo limpia sólo con una nueva sesión lista", async () => {
+    const { app, engine, config, repose } = await fixture();
+    const snapshot = { buildId: "development", sessionId: "old", uiReady: true,
+      mediaId: null, mediaKind: null, state: "empty", currentTime: 0, duration: 0,
+      readyState: 0, networkState: 0, paused: false, ended: false, seeking: false, view: "viewer" };
+    const headers = { "x-naiskos-request": "viewer" };
+    await app.inject({ method: "POST", url: "/api/v1/viewer/heartbeat", headers, payload: snapshot });
+    await app.inject({ method: "POST", url: "/api/v1/system/actions", headers, payload: { action: "exit" } });
+    await app.close();
+    const restarted = await buildApp(config, engine, undefined, repose);
+    const runtime = async () => (await restarted.inject({ method: "GET", url: "/api/v1/viewer/runtime" })).json();
+    expect((await runtime()).intentionalExit).toBe(true);
+    await restarted.inject({ method: "POST", url: "/api/v1/viewer/heartbeat", headers, payload: snapshot });
+    expect((await runtime()).intentionalExit).toBe(true);
+    await restarted.inject({ method: "POST", url: "/api/v1/viewer/heartbeat", headers,
+      payload: { ...snapshot, sessionId: "new", uiReady: false } });
+    expect((await runtime()).intentionalExit).toBe(true);
+    await restarted.inject({ method: "POST", url: "/api/v1/viewer/heartbeat", headers,
+      payload: { ...snapshot, sessionId: "new" } });
+    expect((await runtime()).intentionalExit).toBe(false);
+    await restarted.close();
+  });
+
+  it("no pierde ni duplica resultados de releases entre ráfagas de eventos", async () => {
+    const { app, engine, config } = await fixture();
+    const release = { id: "result-1", type: "software.release.status", status: "installed" };
+    await writeFile(path.join(config.dataRoot, "outbox.json"), JSON.stringify([
+      release, ...Array.from({ length: 1005 }, (_, n) => ({ id: `normal-${n}`, type: "normal" })),
+    ]));
+    await engine.enqueueEvent(release, release.id);
+    await engine.enqueueEvent({ type: "normal" });
+    const saved = JSON.parse(await readFile(path.join(config.dataRoot, "outbox.json"), "utf8"));
+    expect(saved.filter((entry: {id:string}) => entry.id === release.id)).toHaveLength(1);
+    expect(saved).toHaveLength(1001);
+    await app.close();
+  });
+
+  it("no hereda una salida voluntaria del boot anterior", async () => {
+    const { app, config, engine, repose } = await fixture();
+    await app.close();
+    await writeFile(path.join(config.dataRoot, 'viewer-intent.json'), JSON.stringify({
+      intentionalExit: true, bootId: 'boot-anterior', sessionId: 'old',
+    }));
+    const restarted = await buildApp(config, engine, undefined, repose);
+    const runtime = (await restarted.inject({ method: 'GET', url: '/api/v1/viewer/runtime' })).json();
+    expect(runtime.intentionalExit).toBe(false);
+    expect(runtime.ready).toBe(false);
+    await restarted.close();
+  });
   it("controla el reposo con orígenes local y programado protegidos", async () => {
     const { app } = await fixture();
     expect((await app.inject({ method: "GET", url: "/api/v1/repose" })).statusCode).toBe(200);

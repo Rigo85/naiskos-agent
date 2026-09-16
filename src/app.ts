@@ -1,5 +1,6 @@
 import { createReadStream } from "node:fs";
-import { access, mkdir, stat } from "node:fs/promises";
+import { access, mkdir, stat, readFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import Fastify, { FastifyInstance, LogController } from "fastify";
 import fastifyStatic from "@fastify/static";
@@ -12,6 +13,7 @@ import { normalizeSettings } from "./validation.js";
 import { errorForLog } from "./logging.js";
 import type { ViewerPlaybackSnapshot, ViewerPlaybackState } from "./viewer-monitor.js";
 import { ReposeManager } from "./repose.js";
+import { writeJsonAtomic } from "./atomic-store.js";
 
 type SystemAction = "exit" | "poweroff";
 type DisplayScheduleEvent =
@@ -58,6 +60,17 @@ export async function buildApp(
     bodyLimit: 128 * 1024,
   });
   await mkdir(engine.mediaRoot, { recursive: true });
+  // Capture at process startup, never infer the running build from a moving symlink.
+  const buildInfo = await readFile(new URL("../build-info.json", import.meta.url), "utf8")
+    .then((value) => JSON.parse(value) as { releaseId: string })
+    .catch(() => ({ releaseId: "development" }));
+  const agentInstanceId = randomUUID();
+  const bootId = await readFile('/proc/sys/kernel/random/boot_id', 'utf8').then(value => value.trim()).catch(() => agentInstanceId);
+  let quiesceId: string | null = null;
+  const intentFile = path.join(config.dataRoot, 'viewer-intent.json');
+  const storedIntent = await readFile(intentFile, 'utf8').then(JSON.parse).catch(() => null);
+  let intentionalExit = storedIntent?.intentionalExit === true && storedIntent?.bootId === bootId;
+  let exitedSession: string | undefined = storedIntent?.sessionId;
   let systemControl: { sequence: number; action: SystemAction | "none" } = {
     sequence: 0,
     action: "none",
@@ -193,6 +206,9 @@ export async function buildApp(
         actor: null,
       });
       systemControl = { sequence: systemControl.sequence + 1, action };
+      intentionalExit = action === "exit";
+      exitedSession = engine.viewerMonitor.snapshot().playback?.sessionId;
+      await writeJsonAtomic(intentFile, { intentionalExit, sessionId: exitedSession, bootId });
       return reply.code(202).send({ accepted: true, ...systemControl });
     },
   );
@@ -231,12 +247,13 @@ export async function buildApp(
       releaseId?: string;
       status?: string;
       error?: string;
+      reportId?: string;
     };
   }>("/api/v1/system/release-events", async (request, reply) => {
     if (request.headers["x-naiskos-request"] !== "release-activator") {
       return reply.code(403).send({ error: "Solicitud local inválida" });
     }
-    const { campaignId, releaseId, status, error } = request.body ?? {};
+    const { campaignId, releaseId, status, error, reportId } = request.body ?? {};
     const allowed = new Set(["activating", "observing", "installed", "failed", "rolled_back"]);
     if (
       typeof campaignId !== "string" ||
@@ -253,7 +270,7 @@ export async function buildApp(
       releaseId,
       status,
       ...(typeof error === "string" ? { error: error.slice(0, 1_000) } : {}),
-    });
+    }, typeof reportId === "string" && /^[0-9a-f-]{36}$/i.test(reportId) ? reportId : undefined);
     void engine.sync().catch(() => undefined);
     return reply.code(202).send({ accepted: true, id });
   });
@@ -352,6 +369,36 @@ export async function buildApp(
     const snapshot = viewerSnapshot(request.body);
     if (!snapshot) return reply.code(400).send({ error: "Estado del visor inválido" });
     engine.viewerMonitor.record(snapshot);
+    // An explicit desktop launch creates a new live viewer after a voluntary exit.
+    if (intentionalExit && snapshot.uiReady && snapshot.buildId === buildInfo.releaseId &&
+        snapshot.sessionId && snapshot.sessionId !== exitedSession) {
+      intentionalExit = false;
+      await writeJsonAtomic(intentFile, { intentionalExit: false, sessionId: snapshot.sessionId, bootId });
+    }
+    return reply.code(204).send();
+  });
+  app.get("/api/v1/viewer/runtime", async () => {
+    const viewer = engine.viewerMonitor.snapshot();
+    const navigation = viewer.playback?.navigation;
+    const navigationHealthy = viewer.playback?.view !== "viewer" || !navigation || !["staging", "transitioning"].includes(navigation.phase) ||
+      navigation.deadlineMs === null || navigation.phaseElapsedMs <= navigation.deadlineMs + 15_000;
+    return {
+      schemaVersion: 1, agentBuildId: buildInfo.releaseId, agentInstanceId,
+      intentionalExit, quiesceId, viewer,
+      ready: viewer.connected && viewer.playback?.uiReady === true &&
+        viewer.playback.buildId === buildInfo.releaseId && navigationHealthy && !quiesceId,
+    };
+  });
+  app.post("/api/v1/system/quiesce", async (request, reply) => {
+    if (request.headers["x-naiskos-request"] !== "release-activator") {
+      return reply.code(403).send({ error: "Solicitud local inválida" });
+    }
+    quiesceId = randomUUID();
+    return { quiesceId };
+  });
+  app.delete("/api/v1/system/quiesce", async (request, reply) => {
+    if (request.headers["x-naiskos-request"] !== "release-activator") return reply.code(403).send();
+    quiesceId = null;
     return reply.code(204).send();
   });
   app.get("/api/v1/viewer/restart-needed", async () => ({
@@ -633,6 +680,10 @@ function viewerSnapshot(value: unknown): ViewerPlaybackSnapshot | null {
     typeof body.seeking !== "boolean" || !navigation
   ) return null;
   return {
+    ...(typeof body.buildId === "string" && body.buildId.length <= 128 ? { buildId: body.buildId } : {}),
+    ...(typeof body.sessionId === "string" && body.sessionId.length <= 128 ? { sessionId: body.sessionId } : {}),
+    uiReady: body.uiReady === true,
+    quiescedFor: typeof body.quiescedFor === "string" && body.quiescedFor.length <= 128 ? body.quiescedFor : null,
     mediaId: mediaId as string | null,
     mediaKind: mediaKind as "photo" | "video" | null,
     state: state as ViewerPlaybackState,

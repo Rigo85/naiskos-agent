@@ -16,7 +16,7 @@ exec 9>/run/naiskos-release-activate.lock
 /usr/bin/flock --nonblock 9 || exit 0
 
 report() {
-  "$helper" report "$1" "$2" "$3" "${4:-}" || true
+  "$helper" report "$1" "$2" "$3" "${4:-}"
 }
 
 quarantine_request() {
@@ -30,13 +30,11 @@ quarantine_request() {
 }
 
 restart_runtime() {
-  systemctl restart naiskos-agent.service
-  pkill -TERM -x chromium 2>/dev/null || true
+  /opt/node24/bin/node /opt/naiskos/bin/naiskos-release-runtime.mjs restart
 }
 
 local_health() {
-  curl -fsS --max-time 10 http://127.0.0.1:8080/api/v1/health |
-    "$helper" verify-health >/dev/null
+  /opt/node24/bin/node /opt/naiskos/bin/naiskos-release-runtime.mjs health "$release"
 }
 
 rollback_migrations() {
@@ -55,41 +53,12 @@ rollback_migrations() {
 }
 
 if [ -s "$observation" ]; then
-  "$helper" repair-migration-permissions "$migration_state_root" >/dev/null
-  values=$(/opt/node24/bin/node -e '
-    const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
-    process.stdout.write([s.campaignId,s.releaseId,s.previous,s.activatedAt,s.observeMinutes,s.failures||0,(s.migrations||[]).join(",")].join("|"));
-  ' "$observation")
-  IFS='|' read -r campaign release previous activated_at observe_minutes failures applied_migrations <<EOF
-$values
-EOF
-  if local_health; then
-    activated_epoch=$(date -d "$activated_at" +%s)
-    now_epoch=$(date +%s)
-    if [ $((now_epoch - activated_epoch)) -ge $((observe_minutes * 60)) ]; then
-      report "$campaign" "$release" installed
-      rm -f -- "$observation"
-    fi
-  else
-    failures=$((failures + 1))
-    if [ "$failures" -ge 3 ] && [ -n "$previous" ] && [ -d "/opt/naiskos/releases/$previous" ]; then
-      if ! rollback_migrations "$applied_migrations"; then
-        report "$campaign" "$release" failed "Falló el rollback de una migración del baseline"
-        exit 1
-      fi
-      ln -sfn "/opt/naiskos/releases/$previous" /opt/naiskos/current.rollback
-      mv -Tf /opt/naiskos/current.rollback /opt/naiskos/current
-      restart_runtime
-      report "$campaign" "$release" rolled_back "La salud local falló tres veces durante la observación"
-      rm -f -- "$observation"
-    else
-      /opt/node24/bin/node -e '
-        const fs=require("fs"),p=process.argv[1],s=JSON.parse(fs.readFileSync(p,"utf8"));
-        s.failures=Number(process.argv[2]); fs.writeFileSync(p+".tmp",JSON.stringify(s)+"\n",{mode:0o600}); fs.renameSync(p+".tmp",p);
-      ' "$observation" "$failures"
-    fi
-  fi
+  /opt/node24/bin/node /opt/naiskos/bin/naiskos-release-runtime.mjs tick
   exit 0
+fi
+
+if [ -d /var/lib/naiskos/updates/release-reports ]; then
+  /opt/node24/bin/node /opt/naiskos/bin/naiskos-release-runtime.mjs tick
 fi
 
 [ -s "$request" ] || exit 0
@@ -134,6 +103,10 @@ else
 fi
 [ "$authorization" = "authorized" ] || exit 1
 
+if ! /opt/node24/bin/node /opt/naiskos/bin/naiskos-release-runtime.mjs can-activate; then
+  exit 0
+fi
+
 "$helper" repair-migration-permissions "$migration_state_root" >/dev/null
 
 report "$campaign" "$release" activating
@@ -144,6 +117,9 @@ terminal_failure() {
   report "$campaign" "$release" failed "$message"
   quarantine_request "$release"
   rm -rf -- "$staging"
+  if [ "${runtime_stopped:-0}" = 1 ]; then
+    /opt/node24/bin/node /opt/naiskos/bin/naiskos-kiosk-control.mjs start || true
+  fi
   exit 1
 }
 
@@ -163,6 +139,10 @@ if ! $helper verify-extracted "$manifest" "$staging"; then
 fi
 
 previous=$(basename "$(readlink -f /opt/naiskos/current 2>/dev/null || true)")
+if ! /opt/node24/bin/node /opt/naiskos/bin/naiskos-kiosk-control.mjs stop; then
+  terminal_failure "El kiosco no pudo cerrarse; se conserva la release activa"
+fi
+runtime_stopped=1
 applied_migrations=
 for migration in $($helper migrations "$manifest"); do
   migration_root="$staging/migrations/$migration"
