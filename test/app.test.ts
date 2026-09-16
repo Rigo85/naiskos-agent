@@ -46,6 +46,17 @@ async function fixture() {
 }
 
 describe("agente HTTP", () => {
+  it('conserva la confirmación de salud y el ID durable al reportar observación',async()=>{
+    const {app,config}=await fixture();
+    const reportId='11111111-1111-4111-8111-111111111111';
+    const response=await app.inject({method:'POST',url:'/api/v1/system/release-events',
+      headers:{'x-naiskos-request':'release-activator'},payload:{campaignId:reportId,
+        reportId,releaseId:'20260916-test',status:'observing',healthConfirmed:true}});
+    expect(response.statusCode).toBe(202);
+    const events=JSON.parse(await readFile(path.join(config.dataRoot,'outbox.json'),'utf8'));
+    expect(events).toContainEqual(expect.objectContaining({id:reportId,healthConfirmed:true,status:'observing'}));
+    await app.close();
+  });
   it("exige identidad del visor, respeta reposo y confirma la liberación antes de reiniciar", async () => {
     const { app, engine } = await fixture();
     const snapshot = { buildId: "development", sessionId: "session-1", uiReady: true,

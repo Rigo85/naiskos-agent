@@ -42,11 +42,11 @@ async function waitHealthy(release) {
   }
   return false;
 }
-export async function queueReport(campaignId, releaseId, status, error = '') {
+export async function queueReport(campaignId, releaseId, status, error = '', healthConfirmed = false) {
   await mkdir(outbox, { recursive: true, mode: 0o700 });
-  const digest = createHash('sha256').update(`${campaignId}:${releaseId}:${status}`).digest('hex');
+  const digest = createHash('sha256').update(`${campaignId}:${releaseId}:${status}${healthConfirmed ? ':healthy' : ''}`).digest('hex');
   const reportId = `${digest.slice(0,8)}-${digest.slice(8,12)}-4${digest.slice(13,16)}-a${digest.slice(17,20)}-${digest.slice(20,32)}`;
-  const event = { campaignId, releaseId, status, reportId, createdAt: new Date().toISOString(), ...(error ? { error } : {}) };
+  const event = { campaignId, releaseId, status, reportId, createdAt: new Date().toISOString(), ...(error ? { error } : {}), ...(healthConfirmed ? { healthConfirmed: true } : {}) };
   const file = `${outbox}/${reportId}.json`;
   try { await json(file); } catch (e) { if (e.code !== 'ENOENT') throw e; await atomic(file, event); }
   await flushReports();
@@ -127,6 +127,10 @@ async function tick(handoff = false) {
     agentInstanceId: current?.agentInstanceId, viewerSessionId: current?.viewer?.playback?.sessionId,
     uptime: uptime(), healthy: await healthy(state.releaseId), paused: current?.intentionalExit === true };
   const result = observe(state, sample);
+  if (sample.healthy && !sample.paused && !state.healthReported && result.decision === 'wait') {
+    await queueReport(state.campaignId,state.releaseId,'observing','',true);
+    result.state.healthReported = true;
+  }
   await atomic(observation, result.state);
   if (result.decision === 'rollback') return rollback(result.state);
   if (result.decision === 'installed') {

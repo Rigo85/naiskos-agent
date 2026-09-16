@@ -1,5 +1,10 @@
 # Functional kiosk runtime (baseline 13)
 
+Baseline 15 adds a durable `healthConfirmed` observing report after a healthy
+functional sample. Its stable ID differs from the initial startup report, so a
+temporary startup warning can be cleared without claiming installation success.
+It does not change observation time, rollback rules or OS maintenance policy.
+
 `GET /api/v1/viewer/runtime` reports the agent's immutable package identity,
 instance ID, viewer session/build, fresh heartbeat, rendered-UI readiness,
 navigation deadline and intentional exit state. HTTP availability alone is not

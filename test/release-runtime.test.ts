@@ -33,3 +33,18 @@ it('persiste resultados sin agente, reintenta con el mismo ID y conserva el orde
   expect(sent.map(event => event.status)).toEqual(['observing', 'installed']);
   expect(sent[1].reportId).toBe(installed.reportId);
 });
+it('confirma salud con ID propio estable sin confundirla con el aviso inicial',async()=>{
+  root=await mkdtemp(path.join(os.tmpdir(),'naiskos-runtime-health-'));
+  vi.stubEnv('NAISKOS_DATA_ROOT',root);
+  vi.stubGlobal('fetch',vi.fn().mockRejectedValue(new Error('offline')));
+  const {queueReport}=await import('../deploy/naiskos-release-runtime.mjs');
+  const campaign='11111111-1111-4111-8111-111111111111';
+  await queueReport(campaign,'20260916-test','observing','Salud pendiente');
+  await queueReport(campaign,'20260916-test','observing','',true);
+  await queueReport(campaign,'20260916-test','observing','',true);
+  const dir=path.join(root,'updates/release-reports');
+  const files=await readdir(dir);expect(files).toHaveLength(2);
+  const events=await Promise.all(files.map(async f=>JSON.parse(await readFile(path.join(dir,f),'utf8'))));
+  expect(events.filter(e=>e.healthConfirmed)).toHaveLength(1);
+  expect(events.find(e=>e.healthConfirmed).error).toBeUndefined();
+});

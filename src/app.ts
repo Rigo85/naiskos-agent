@@ -248,6 +248,7 @@ export async function buildApp(
       status?: string;
       error?: string;
       reportId?: string;
+      healthConfirmed?: boolean;
     };
   }>("/api/v1/system/release-events", async (request, reply) => {
     if (request.headers["x-naiskos-request"] !== "release-activator") {
@@ -270,6 +271,7 @@ export async function buildApp(
       releaseId,
       status,
       ...(typeof error === "string" ? { error: error.slice(0, 1_000) } : {}),
+      ...(status === 'observing' && request.body.healthConfirmed === true ? { healthConfirmed: true } : {}),
     }, typeof reportId === "string" && /^[0-9a-f-]{36}$/i.test(reportId) ? reportId : undefined);
     void engine.sync().catch(() => undefined);
     return reply.code(202).send({ accepted: true, id });
