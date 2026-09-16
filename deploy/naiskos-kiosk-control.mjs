@@ -1,5 +1,5 @@
 #!/opt/node24/bin/node
-import { readdir, readFile, writeFile, rename, stat } from 'node:fs/promises';
+import { readdir, readFile, readlink, writeFile, rename, stat } from 'node:fs/promises';
 import { execFile as execCallback } from 'node:child_process';
 import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
@@ -11,14 +11,24 @@ const unit = 'naiskos-kiosk-session.service';
 const base = 'http://127.0.0.1:8080';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-export function parseProcess(pid, raw, argv, uid) {
+export function parseProcess(pid, raw, argv, uid, exe = null) {
   const fields = raw.slice(raw.lastIndexOf(')') + 2).trim().split(/\s+/);
-  return { pid, uid, state: fields[0], parent: Number(fields[1]), group: Number(fields[2]),
+  return { pid, uid, exe, state: fields[0], parent: Number(fields[1]), group: Number(fields[2]),
     start: fields[19], threads: Number(fields[17]), argv: argv.split('\0').filter(Boolean) };
 }
 export function live(p) { return !!p && !['Z', 'X', 'D', 'T', 't'].includes(p.state); }
 export function isLauncher(p) {
   return p.argv[0] === launcher || (p.argv[1] === launcher && /\/(?:ba|da|a)?sh$/.test(p.argv[0] ?? ''));
+}
+export function chromiumArguments(p) {
+  // Chromium on Raspberry Pi rewrites /proc/cmdline into a single argument.
+  // Verify the executable independently, then handle both representations.
+  if (!p.exe?.replace(/ \(deleted\)$/, '').endsWith('/chromium')) return null;
+  return p.argv.length === 1 ? p.argv[0].trim().split(/\s+/) : p.argv;
+}
+export function isKioskBrowser(p) {
+  const args = chromiumArguments(p);
+  return !!args && args.includes('--kiosk') && !args.some(a => a.startsWith('--type='));
 }
 export function descendants(processes, roots) {
   const ids = new Set(roots);
@@ -32,7 +42,7 @@ export function descendants(processes, roots) {
 export function ownedTree(all, owner) {
   const tree = descendants(all, [owner.pid]);
   const groups = new Set(tree.filter(p => p.group !== owner.group && p.group > 1 &&
-    (p.argv.some(a => a.endsWith('/systemd-inhibit')) || p.argv[0]?.endsWith('/chromium'))).map(p => p.group));
+    (p.argv.some(a => a.endsWith('/systemd-inhibit')) || chromiumArguments(p))).map(p => p.group));
   return all.filter(p => p.uid === owner.uid && (tree.some(t => t.pid === p.pid) || groups.has(p.group)));
 }
 export function stillRunning(p) { return p.state !== 'X' && (p.state !== 'Z' || p.threads > 1); }
@@ -40,10 +50,11 @@ async function processes() {
   const entries = await readdir('/proc');
   const all = await Promise.all(entries.filter(x => /^\d+$/.test(x)).map(async id => {
     try {
-      const [raw, argv, details] = await Promise.all([
+      const [raw, argv, details, exe] = await Promise.all([
         readFile(`/proc/${id}/stat`, 'utf8'), readFile(`/proc/${id}/cmdline`, 'utf8'), stat(`/proc/${id}`),
+        readlink(`/proc/${id}/exe`).catch(() => null),
       ]);
-      return parseProcess(Number(id), raw, argv, details.uid);
+      return parseProcess(Number(id), raw, argv, details.uid, exe);
     } catch { return null; }
   }));
   return all.filter(Boolean);
@@ -74,18 +85,17 @@ async function context() {
   if (details.uid !== 0 || (details.mode & 0o077)) throw new Error('Contexto del kiosco inseguro');
   return JSON.parse(await readFile(contextFile, 'utf8'));
 }
-export async function status() {
+export async function status({ captureContext = true } = {}) {
   const all = await processes();
   // A stopped or uninterruptible owner still owns the browser. Never mistake
   // it for an absent launcher and start a second instance over its children.
   const owners = all.filter(p => isLauncher(p) && stillRunning(p));
   if (owners.length > 1) throw new Error('Más de un lanzador Naiskos');
-  if (owners[0] && process.getuid() === 0) await remember(owners[0]);
+  if (captureContext && owners[0] && process.getuid() === 0) await remember(owners[0]);
   const tree = owners[0] ? ownedTree(all, owners[0]) : [];
-  const browsers = tree.filter(p => p.argv[0]?.endsWith('/chromium') && p.argv.includes('--kiosk') &&
-    !p.argv.some(a => a.startsWith('--type=')));
+  const browsers = tree.filter(isKioskBrowser);
   const orphans = owners.length ? [] : all.filter(p => stillRunning(p) &&
-    p.argv.some(a => a.startsWith('--user-data-dir=') && a.endsWith('/naiskos/chromium')));
+    chromiumArguments(p)?.some(a => a.startsWith('--user-data-dir=') && a.endsWith('/naiskos/chromium')));
   return { launcherPresent: owners.length === 1, browserLive: browsers.length === 1 && browsers.some(live),
     orphanedProcesses: orphans.map(p => p.pid),
     browserSuspended: browsers.some(p => ['T', 't'].includes(p.state)),

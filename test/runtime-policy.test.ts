@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 // Runtime modules are shipped as plain ESM for use before/after agent replacement.
 import { observe, runtimeHealthy } from '../deploy/naiskos-runtime-policy.mjs';
-import { descendants, live, parseProcess, stillRunning, ownedTree, isLauncher } from '../deploy/naiskos-kiosk-control.mjs';
+import { descendants, live, parseProcess, stillRunning, ownedTree, isLauncher, isKioskBrowser, chromiumArguments } from '../deploy/naiskos-kiosk-control.mjs';
 
 const runtime = { schemaVersion: 1, ready: true, agentBuildId: 'new',
   viewer: { connected: true, playback: { buildId: 'new', uiReady: true, view: 'repose' } } };
@@ -52,6 +52,17 @@ describe('salud y observación funcional', () => {
 });
 
 describe('selección de procesos del kiosco', () => {
+  it('reconoce cmdline normal y reescrito por Chromium con executable verificado', () => {
+    const exe = '/usr/lib/chromium/chromium';
+    const flags = '--kiosk --user-data-dir=/home/kiosk/.local/state/naiskos/chromium http://127.0.0.1:8080/';
+    expect(isKioskBrowser({ exe, argv: [exe, ...flags.split(' ')] })).toBe(true);
+    expect(isKioskBrowser({ exe, argv: [`${exe} ${flags}`] })).toBe(true);
+    expect(isKioskBrowser({ exe: `${exe} (deleted)`, argv: [`${exe} ${flags}`] })).toBe(true);
+    expect(isKioskBrowser({ exe, argv: [`${exe} ${flags} --type=renderer`] })).toBe(false);
+    expect(isKioskBrowser({ exe: '/usr/bin/node', argv: [`${exe} ${flags}`] })).toBe(false);
+    expect(isKioskBrowser({ exe: null, argv: [] })).toBe(false);
+    expect(chromiumArguments({ exe, argv: [`${exe} ${flags}`] })).toContain('--user-data-dir=/home/kiosk/.local/state/naiskos/chromium');
+  });
   it('no confunde runuser o systemd-run con el script lanzador', () => {
     const file = '/opt/naiskos/bin/start-naiskos-kiosk';
     expect(isLauncher({ argv: ['/bin/sh', file] })).toBe(true);

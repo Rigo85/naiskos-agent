@@ -50,3 +50,19 @@ new restart after the old activation lock is released. If rollback restores an
 older build without this contract, it is reported as requiring review, not as
 functionally verified. An older restored activator may also require assisted
 delivery of retained release reports.
+
+## Raspberry Pi process-title correction (baseline 14)
+
+The first hardware activation exposed a gap in the original process fixture:
+Chromium rewrites `/proc/PID/cmdline` into one string on this image. The viewer
+and heartbeat were healthy but baseline 13 reported `browserLive: false`.
+Detection now verifies `/proc/PID/exe` independently and accepts NUL-separated
+arguments or the rewritten title. Renderers are excluded in both formats;
+an unrelated executable cannot impersonate Chromium by changing its title.
+Missing exe data does not discard a zombie from shutdown tracking.
+
+The container fixture now rewrites its title in the same way. Before deployment,
+the corrected status reader also identified the live pilot browser in read-only
+mode. Neither test restarts the pilot. Baseline 13 remains immutable; the signed
+baseline 14 migration restores the watchdog and activation timer after the
+temporary operational pause.

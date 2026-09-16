@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { access, mkdir, readFile, writeFile, readlink } from 'node:fs/promises';
+import { access, mkdir, readFile, writeFile, readlink, copyFile } from 'node:fs/promises';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createServer } from 'node:http';
@@ -10,9 +10,10 @@ const source = '/workspace-agent/deploy/naiskos-kiosk-control.mjs';
 const launcher = '/opt/naiskos/bin/start-naiskos-kiosk';
 await mkdir('/opt/naiskos/bin', { recursive: true });
 await exec('useradd', ['-m', '-u', '1234', 'kiosk']);
-await writeFile('/tmp/browser-fixture.mjs', 'setInterval(() => {}, 1000);');
+await copyFile(process.execPath, '/tmp/chromium');
+await writeFile('/tmp/browser-fixture.mjs', 'process.title = process.argv.join(" "); setInterval(() => {}, 1000);');
 await writeFile(launcher, `#!/bin/bash
-/usr/bin/setsid /bin/bash -c 'exec -a /usr/lib/chromium/chromium /usr/local/bin/node /tmp/browser-fixture.mjs --kiosk --user-data-dir=/home/kiosk/.local/state/naiskos/chromium' &
+/usr/bin/setsid /tmp/chromium /tmp/browser-fixture.mjs --kiosk --user-data-dir=/home/kiosk/.local/state/naiskos/chromium &
 wait
 `, { mode: 0o755 });
 let commands = 0;
