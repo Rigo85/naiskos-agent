@@ -8,6 +8,14 @@ import {
 } from "../src/validation.js";
 
 describe("normalizeSettings", () => {
+  it("conserva collage y normaliza configuraciones anteriores a individual", () => {
+    for (const collageMode of ["off", "columns", "adaptive"] as const) {
+      expect(normalizeSettings({ ...DEFAULT_SETTINGS, collageMode }).collageMode).toBe(collageMode);
+    }
+    const { collageMode, ...legacy } = DEFAULT_SETTINGS;
+    expect(normalizeSettings(legacy).collageMode).toBe("off");
+    expect(() => normalizeSettings({ ...DEFAULT_SETTINGS, collageMode: "recursive" })).toThrow("collageMode");
+  });
   it("acepta la configuración predeterminada", () => {
     expect(normalizeSettings(DEFAULT_SETTINGS)).toEqual(DEFAULT_SETTINGS);
   });

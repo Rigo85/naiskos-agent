@@ -1,6 +1,7 @@
 export type FitMode = "contain" | "cover";
 
 export interface FrameSettings {
+  collageMode: "off" | "columns" | "adaptive";
   photoDurationSeconds: number;
   fadeDurationMs: number;
   defaultFitMode: FitMode;
@@ -37,6 +38,8 @@ export interface WeatherSnapshot {
 }
 
 export interface RemoteMediaItem {
+  width?: number | null;
+  height?: number | null;
   id: string;
   kind: "photo" | "video";
   downloadUrl: string;
@@ -60,6 +63,8 @@ export interface RemoteMediaItem {
 }
 
 export interface LocalMediaItem {
+  width?: number | null;
+  height?: number | null;
   id: string;
   kind: "photo" | "video";
   url: string;
@@ -131,6 +136,7 @@ export interface AgentStatus {
 }
 
 export const DEFAULT_SETTINGS: FrameSettings = {
+  collageMode: "off",
   photoDurationSeconds: 30,
   fadeDurationMs: 450,
   defaultFitMode: "contain",

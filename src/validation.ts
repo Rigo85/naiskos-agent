@@ -23,6 +23,10 @@ export function normalizeSettings(value: unknown): FrameSettings {
   const volume = Number(input.volume ?? DEFAULT_SETTINGS.volume);
   const fit = input.defaultFitMode;
   const order = input.order;
+  const collageMode = input.collageMode ?? "off";
+  if (!["off", "columns", "adaptive"].includes(String(collageMode))) {
+    throw new Error("collageMode inválido");
+  }
   if (!Number.isFinite(duration) || duration < 1 || duration > 86_400) {
     throw new Error("photoDurationSeconds fuera de rango");
   }
@@ -39,6 +43,7 @@ export function normalizeSettings(value: unknown): FrameSettings {
   }
   return {
     photoDurationSeconds: Math.round(duration),
+    collageMode: collageMode as FrameSettings["collageMode"],
     fadeDurationMs: Math.round(fade),
     defaultFitMode: fit,
     order: order as FrameSettings["order"],
@@ -209,6 +214,13 @@ export function validateRemoteManifest(
   if (!Array.isArray(input.media)) throw new Error("Lista de medios inválida");
   for (const raw of input.media) {
     const media = object(raw, "media");
+    for (const dimension of ["width", "height"]) {
+      const value = media[dimension];
+      if (value !== undefined && value !== null &&
+          (!Number.isSafeInteger(value) || Number(value) <= 0)) {
+        throw new Error(`Dimensión ${dimension} inválida`);
+      }
+    }
     if (media.kind !== "photo" && media.kind !== "video")
       throw new Error("Tipo de medio inválido");
     if (typeof media.id !== "string" || typeof media.downloadUrl !== "string") {

@@ -488,6 +488,8 @@ export class SyncEngine {
         }
       }
       media.push({
+        width: item.width ?? null,
+        height: item.height ?? null,
         id: item.id,
         kind: item.kind,
         url: `/media/${filename}`,
