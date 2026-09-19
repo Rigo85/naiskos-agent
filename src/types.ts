@@ -140,7 +140,7 @@ export interface AgentStatus {
 
 export const DEFAULT_SETTINGS: FrameSettings = {
   collageMode: "off",
-  collageBackground: "black",
+  collageBackground: "material",
   photoDurationSeconds: 30,
   fadeDurationMs: 450,
   defaultFitMode: "contain",

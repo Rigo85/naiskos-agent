@@ -1,6 +1,8 @@
 # Metadatos decorativos de collage
 
-`settings.collageBackground` admite `black` (predeterminado/legado) y `material`.
+`settings.collageBackground` admite `material` (predeterminado, también cuando
+falta en una configuración antigua) y `black`. Una elección explícita de negro
+se conserva; no se sustituye por el valor predeterminado.
 Sigue el circuito normal de preferencias locales, revisiones, outbox y respaldo
 central; recibir contenido nuevo no debe reemplazar una preferencia local vigente.
 

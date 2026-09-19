@@ -24,7 +24,7 @@ export function normalizeSettings(value: unknown): FrameSettings {
   const fit = input.defaultFitMode;
   const order = input.order;
   const collageMode = input.collageMode ?? "off";
-  const collageBackground = input.collageBackground ?? "black";
+  const collageBackground = input.collageBackground ?? DEFAULT_SETTINGS.collageBackground;
   if (!["black", "material"].includes(String(collageBackground))) {
     throw new Error("collageBackground inválido");
   }

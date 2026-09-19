@@ -8,9 +8,11 @@ import {
 } from "../src/validation.js";
 
 describe("normalizeSettings", () => {
-  it("conserva el fondo elegido y mantiene negro en configuraciones antiguas", () => {
+  it("usa tonos por defecto sin reemplazar una elección explícita de negro", () => {
     const { collageBackground, ...legacy } = DEFAULT_SETTINGS;
-    expect(normalizeSettings(legacy).collageBackground).toBe("black");
+    expect(DEFAULT_SETTINGS.collageBackground).toBe("material");
+    expect(normalizeSettings(legacy).collageBackground).toBe("material");
+    expect(normalizeSettings({ ...legacy, collageBackground: "black" }).collageBackground).toBe("black");
     expect(normalizeSettings({ ...legacy, collageBackground: "material" }).collageBackground).toBe("material");
     expect(() => normalizeSettings({ ...legacy, collageBackground: "url(x)" })).toThrow("collageBackground");
   });
