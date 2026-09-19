@@ -7,6 +7,7 @@ import { pipeline } from "node:stream/promises";
 
 import { writeJsonAtomic } from "./atomic-store.js";
 import { AgentConfig } from "./config.js";
+import { acquireReleaseLock } from "./release-lock.js";
 
 interface SoftwareAssignment {
   campaignId: string;
@@ -50,7 +51,10 @@ export class SoftwareUpdateManager {
     let assignment: SoftwareAssignment | null = null;
     const updateRoot = path.join(this.config.dataRoot, "updates");
     const requestFile = path.join(updateRoot, "activation-request.json");
+    let unlock: (() => Promise<void>) | null = null;
     try {
+      unlock = await acquireReleaseLock(this.config.dataRoot);
+      if (!unlock) return "none";
       const response = await fetch(
         `${centralUrl}/api/v1/frames/${encodeURIComponent(frameId)}/software`,
         {
@@ -58,6 +62,11 @@ export class SoftwareUpdateManager {
           signal: AbortSignal.timeout(20_000),
         },
       );
+      if (response.status === 409) {
+        const body = await response.json() as { code?: string };
+        if (body.code === "software_operation_in_progress") return "none";
+        throw new Error("Conflicto desconocido consultando actualizaciones");
+      }
       if (response.status === 204) {
         await this.discardPendingRequest(requestFile, updateRoot);
         return "none";
@@ -138,6 +147,7 @@ export class SoftwareUpdateManager {
       }
       throw error;
     } finally {
+      await unlock?.();
       this.running = false;
     }
   }

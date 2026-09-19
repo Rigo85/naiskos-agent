@@ -1,5 +1,5 @@
 #!/opt/node24/bin/node
-import { readFile, open, rename, readdir, mkdir, rm } from 'node:fs/promises';
+import { readFile, open, rename, readdir, mkdir, rm, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { execFile as execCallback } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -75,23 +75,50 @@ async function restart() {
   await exec('/usr/bin/systemctl', ['restart', 'naiskos-agent.service'], { timeout: 45_000 });
   await kiosk('start');
 }
+async function quarantinePending(state) {
+  const request = `${root}/activation-request.json`;
+  let pending;
+  try { pending = await json(request); } catch (e) { if (e.code === 'ENOENT') return; throw e; }
+  if (pending.campaignId !== state.campaignId || pending.releaseId !== state.releaseId)
+    throw new Error('La solicitud pendiente pertenece a otra operación');
+  await mkdir(`${root}/failed`, { recursive: true, mode: 0o700 });
+  await rename(request, `${root}/failed/${state.releaseId}-interrupted-request.json`);
+}
 async function rollback(state) {
+  if (!/^[0-9]{8}[A-Za-z0-9._-]{1,80}$/.test(state.previous)) throw new Error('Release anterior inválida');
+  const wasActivated = state.wasActivated ??
+    (await realpath('/opt/naiskos/current')) === `/opt/naiskos/releases/${state.releaseId}`;
+  if (state.phase === 'preparing' && !wasActivated && !(state.migrations ?? []).length) {
+    await quarantinePending(state);
+    await queueReport(state.campaignId, state.releaseId, 'failed', state.error || 'Preparación interrumpida');
+    await rm(observation);
+    return;
+  }
+  state = { ...state, wasActivated };
   // Save the phase before touching links: a power interruption resumes this rollback.
   await atomic(observation, { ...state, phase: 'rollback' });
   try {
+    await quarantinePending(state);
     await kiosk('stop');
+    const errors = [];
     for (const migration of state.migrations ?? []) {
-      await exec('/opt/node24/bin/node', [helper, 'rollback-migration', migration,
-        '/etc/naiskos/baseline.json', '/var/lib/naiskos/migrations'], { timeout: 120_000 });
+      try {
+        await exec('/opt/node24/bin/node', [helper, 'rollback-migration', migration,
+          '/etc/naiskos/baseline.json', '/var/lib/naiskos/migrations'], { timeout: 120_000 });
+      } catch { errors.push(`No se pudo revertir ${migration}`); }
     }
-    if (!/^[0-9]{8}[A-Za-z0-9._-]{1,80}$/.test(state.previous)) throw new Error('Release anterior inválida');
     await exec('/usr/bin/ln', ['-sfn', `/opt/naiskos/releases/${state.previous}`, '/opt/naiskos/current.rollback']);
     await exec('/usr/bin/mv', ['-Tf', '/opt/naiskos/current.rollback', '/opt/naiskos/current']);
     await restart();
     if (!await waitHealthy(state.previous)) throw new Error('La versión anterior no confirmó salud funcional; requiere revisión');
-    await queueReport(state.campaignId, state.releaseId, 'rolled_back', 'La nueva release no recuperó el kiosco');
+    if (errors.length) throw new Error(errors.join('; '));
+    await queueReport(state.campaignId, state.releaseId, wasActivated ? 'rolled_back' : 'failed',
+      state.error || 'La nueva release no recuperó el kiosco');
     await rm(observation);
   } catch (error) {
+    // Best effort even when rollback itself fails. Do not certify recovery from
+    // merely starting the launcher; the failure remains durable for diagnosis.
+    await restart().catch(() => undefined);
     await mkdir(`${root}/failed`, { recursive: true, mode: 0o700 });
     await atomic(`${root}/failed/${state.releaseId}-runtime.json`, { ...state, phase: 'failed', error: error.message });
     await queueReport(state.campaignId, state.releaseId, 'failed', error.message);
@@ -106,6 +133,8 @@ async function tick(handoff = false) {
   let state;
   try { state = await json(observation); } catch (e) { if (e.code === 'ENOENT') return; throw e; }
   if (state.phase === 'failed') return;
+  if (state.phase === 'preparing' || state.phase === 'activating')
+    return rollback({ ...state, error: 'Activación interrumpida antes de iniciar observación' });
   if (state.phase === 'rollback') return rollback(state);
   if (handoff) {
     // The baseline-12 activator already loaded its old restart function. Complete
@@ -139,6 +168,50 @@ async function tick(handoff = false) {
   }
 }
 export async function main(command, args = []) {
+  if (command === 'prepare-activation') {
+    const [campaignId, releaseId, previous, minutes] = args;
+    const pattern = /^[0-9]{8}[A-Za-z0-9._-]{1,80}$/;
+    if (!/^[a-f0-9-]{36}$/.test(campaignId) || !pattern.test(releaseId) || !pattern.test(previous) ||
+      !Number.isInteger(Number(minutes)) || Number(minutes) < 1 || Number(minutes) > 10080)
+      throw new Error('Estado de activación inválido');
+    if (await json(observation).catch(e => { if (e.code === 'ENOENT') return null; throw e; }))
+      throw new Error('Existe una operación sin terminar');
+    if (await realpath('/opt/naiskos/current') !== `/opt/naiskos/releases/${previous}`)
+      throw new Error('La release anterior cambió durante la preparación');
+    await atomic(observation, { campaignId, releaseId, previous, observeMinutes: Number(minutes),
+      phase: 'preparing', preparedAt: new Date().toISOString(), failures: 0, migrations: [] });
+    return;
+  }
+  if (command === 'begin-activation') {
+    const state = await json(observation);
+    if (state.phase !== 'preparing') throw new Error('La operación no está preparada');
+    await atomic(observation, { ...state, phase: 'activating' });
+    return;
+  }
+  if (command === 'migration-intent') {
+    const [migrationId, descriptorFile] = args;
+    const state = await json(observation);
+    const descriptor = await json(descriptorFile);
+    const baseline = await json('/etc/naiskos/baseline.json');
+    if (state.phase !== 'activating' || descriptor.migrationId !== migrationId)
+      throw new Error('Intento de migración fuera de la activación');
+    // Already-current migrations are never rolled back with a later release.
+    if (String(baseline.baselineVersion) === String(descriptor.fromVersion)) {
+      state.migrations = [migrationId, ...state.migrations.filter(id => id !== migrationId)];
+      await atomic(observation, state);
+    }
+    return;
+  }
+  if (command === 'begin-observation') {
+    const state = await json(observation);
+    if (state.phase !== 'activating' || await realpath('/opt/naiskos/current') !== `/opt/naiskos/releases/${state.releaseId}`)
+      throw new Error('La release preparada no es la activa');
+    await atomic(observation, { ...state, phase: 'observing', activatedAt: new Date().toISOString() });
+    return;
+  }
+  if (command === 'abort-activation') {
+    return rollback({ ...await json(observation), error: args[0] || 'Activación abortada' });
+  }
   if (command === 'can-activate') {
     const current = await runtime();
     if (current.intentionalExit) throw new Error('Activación aplazada: cierre voluntario del visor');

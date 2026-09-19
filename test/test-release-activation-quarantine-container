@@ -9,6 +9,7 @@ set -eu
   echo "La prueba requiere root." >&2
   exit 1
 }
+getent group naiskos >/dev/null || groupadd --system naiskos
 
 agent_root=${NAISKOS_AGENT_TEST_ROOT:-/workspace-agent}
 release=20260906-quarantine-test-001
@@ -28,7 +29,7 @@ cp "$agent_root/deploy/naiskos-release-activate" /opt/naiskos/bin/naiskos-releas
 chmod 0755 /opt/naiskos/bin/naiskos-release-activate
 mkdir -p /opt/node24/bin
 ln -s "$(command -v node)" /opt/node24/bin/node
-printf '%s\n' 'process.exit(0);' > /opt/naiskos/bin/naiskos-release-runtime.mjs
+printf '%s\n' 'import{appendFileSync}from"node:fs";if(process.argv[2]==="abort-activation")appendFileSync("/tmp/naiskos-report-count","x");process.exit(0);' > /opt/naiskos/bin/naiskos-release-runtime.mjs
 printf '%s\n' 'process.exit(0);' > /opt/naiskos/bin/naiskos-kiosk-control.mjs
 printf '%s\n' '{}' > /etc/naiskos/baseline.json
 printf '%s\n' 'public-key-test' > /etc/naiskos/release-signing-public.pem

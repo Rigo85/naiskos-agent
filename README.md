@@ -180,6 +180,25 @@ la firma Ed25519, tamaño, SHA-256, arquitectura, Node 24 y baseline mínimo.
 Después escribe una solicitud atómica; nunca modifica `/opt` ni ejecuta la
 release.
 
+Desde el baseline 16, consulta/descarga/limpieza y activación comparten un
+`flock` del kernel (`updates/.software-update.lock`, cuyo inode no se elimina).
+Un agente que encuentra el bloqueo ocupado no toca la solicitud. La respuesta
+central `409 software_operation_in_progress` también conserva la preparación.
+El activador registra la operación antes de anunciarla, copia el manifiesto al
+directorio de release propiedad de root y valida las migraciones antes de
+cerrar el visor. No vuelve a depender de la descarga durante la instalación.
+Las fases e intenciones de migración se persisten con fsync: una interrupción
+antes de cerrar el visor se notifica sin reiniciarlo; después, el siguiente
+timer recupera la versión anterior y comprueba su salud funcional. Los errores
+y señales capturables siguen la misma recuperación inmediatamente. Esto no
+sustituye un backup ni garantiza recuperación de una microSD dañada.
+
+Regresión de concurrencia y fallos: ejecutar
+`test/test-release-coordination-container.mjs` como root **sólo en un contenedor
+desechable**, con este repo en `/workspace-agent` y provision en
+`/workspace-provision`. Usa activador, firma, bloqueo y runtime reales; simula
+hardware, systemd y HTTP. Incluye el salto desde el activador anterior.
+
 `naiskos-release-activate.timer` ejecuta como root el activador restringido.
 Éste vuelve a verificar, rechaza rutas o enlaces inseguros, valida cada archivo
 declarado y sólo admite migraciones de baseline con descriptor versión 2. El

@@ -15,6 +15,17 @@ force=0
 exec 9>/run/naiskos-release-activate.lock
 /usr/bin/flock --nonblock 9 || exit 0
 
+# Shared with SoftwareUpdateManager. The /run lock still serializes timers and
+# handoff; this persistent inode additionally excludes download/cleanup.
+mkdir -p /var/lib/naiskos/updates
+update_lock=/var/lib/naiskos/updates/.software-update.lock
+[ ! -L "$update_lock" ] || exit 1
+touch "$update_lock"
+chgrp naiskos "$update_lock"
+chmod 0660 "$update_lock"
+exec 8<>"$update_lock"
+/usr/bin/flock --nonblock 8 || exit 0
+
 report() {
   "$helper" report "$1" "$2" "$3" "${4:-}"
 }
@@ -24,6 +35,7 @@ quarantine_request() {
   mkdir -p -- "$failed_root"
   chmod 0700 "$failed_root"
   failed_request="$failed_root/$failure_id-$(date -u +%Y%m%dT%H%M%SZ)-$$.json"
+  [ -e "$request" ] || return 0
   mv -f -- "$request" "$failed_request"
   chmod 0600 "$failed_request"
   echo "Solicitud de activación en cuarentena: $failed_request" >&2
@@ -35,21 +47,6 @@ restart_runtime() {
 
 local_health() {
   /opt/node24/bin/node /opt/naiskos/bin/naiskos-release-runtime.mjs health "$release"
-}
-
-rollback_migrations() {
-  migration_list=$1
-  [ -n "$migration_list" ] || return 0
-  rollback_ok=1
-  old_ifs=$IFS
-  IFS=','
-  for migration_id in $migration_list; do
-    if ! "$helper" rollback-migration "$migration_id" "$baseline" "$migration_state_root"; then
-      rollback_ok=0
-    fi
-  done
-  IFS=$old_ifs
-  [ "$rollback_ok" -eq 1 ]
 }
 
 if [ -s "$observation" ]; then
@@ -109,21 +106,41 @@ fi
 
 "$helper" repair-migration-permissions "$migration_state_root" >/dev/null
 
-report "$campaign" "$release" activating
 staging="/opt/naiskos/releases/.staging-$release"
+prepared=0
+failure_message="La activación se interrumpió inesperadamente"
 
 terminal_failure() {
-  message=$1
-  report "$campaign" "$release" failed "$message"
-  quarantine_request "$release"
-  rm -rf -- "$staging"
-  if [ "${runtime_stopped:-0}" = 1 ]; then
-    /opt/node24/bin/node /opt/naiskos/bin/naiskos-kiosk-control.mjs start || true
-  fi
+  failure_message=$1
   exit 1
 }
 
-rm -rf -- "$staging"
+recover_failure() {
+  result=$?
+  trap - EXIT HUP INT TERM
+  [ "$result" -ne 0 ] || return 0
+  set +e
+  quarantine_request "$release"
+  if [ "$prepared" = 1 ] || [ -s "$observation" ]; then
+    /opt/node24/bin/node /opt/naiskos/bin/naiskos-release-runtime.mjs abort-activation "$failure_message"
+  else
+    report "$campaign" "$release" failed "$failure_message"
+  fi
+  # Retain extracted evidence; never retry or discard a half-applied release.
+  exit "$result"
+}
+trap recover_failure EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+previous=$(basename "$(readlink -f /opt/naiskos/current 2>/dev/null || true)")
+/opt/node24/bin/node /opt/naiskos/bin/naiskos-release-runtime.mjs prepare-activation \
+  "$campaign" "$release" "$previous" "$observe_minutes"
+prepared=1
+report "$campaign" "$release" activating
+
+[ ! -e "$staging" ] || terminal_failure "Existe evidencia de una preparación anterior; se requiere otra release"
 mkdir -p -- "$staging"
 if tar -tzf "$archive" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
   terminal_failure "El archivo contiene rutas no permitidas"
@@ -134,60 +151,51 @@ fi
 if ! tar -xzf "$archive" -C "$staging" --no-same-owner --no-same-permissions; then
   terminal_failure "No se pudo extraer el archivo de la release"
 fi
-if ! $helper verify-extracted "$manifest" "$staging"; then
+# All further reads come from the root-owned extracted release, not the agent's
+# download directory. Copy before any kiosk shutdown or migration.
+cp -- "$manifest" "$staging/release.json"
+if ! $helper verify-extracted "$staging/release.json" "$staging"; then
   terminal_failure "La release extraída no coincide con el manifiesto"
 fi
+if ! migrations=$($helper migrations "$staging/release.json"); then
+  terminal_failure "No se pudo leer la lista de migraciones"
+fi
+destination="/opt/naiskos/releases/$release"
+[ ! -e "$destination" ] || terminal_failure "La versión ya existe de forma inesperada"
+chown -R root:root "$staging"
+mv -- "$staging" "$destination"
 
-previous=$(basename "$(readlink -f /opt/naiskos/current 2>/dev/null || true)")
+/opt/node24/bin/node /opt/naiskos/bin/naiskos-release-runtime.mjs begin-activation
 if ! /opt/node24/bin/node /opt/naiskos/bin/naiskos-kiosk-control.mjs stop; then
   terminal_failure "El kiosco no pudo cerrarse; se conserva la release activa"
 fi
-runtime_stopped=1
-applied_migrations=
-for migration in $($helper migrations "$manifest"); do
-  migration_root="$staging/migrations/$migration"
+for migration in $migrations; do
+  migration_root="$destination/migrations/$migration"
   descriptor="$migration_root/migration.json"
+  /opt/node24/bin/node /opt/naiskos/bin/naiskos-release-runtime.mjs migration-intent "$migration" "$descriptor"
   if ! migration_result=$($helper apply-migration "$descriptor" "$migration_root" "$baseline" "$migration_state_root"); then
-    rollback_migrations "$applied_migrations" || true
     terminal_failure "No se pudo aplicar la migración declarativa: $migration"
   fi
   migration_status=${migration_result%%|*}
-  migration_id=${migration_result#*|}
   case "$migration_status" in
-    applied)
-      if [ -n "$applied_migrations" ]; then
-        applied_migrations="$migration_id,$applied_migrations"
-      else
-        applied_migrations=$migration_id
-      fi
-      ;;
+    applied) ;;
     already-current) ;;
     *)
-      rollback_migrations "$applied_migrations" || true
       terminal_failure "Resultado inesperado de migración: $migration"
       ;;
   esac
 done
 
-destination="/opt/naiskos/releases/$release"
-[ ! -e "$destination" ] || terminal_failure "La versión ya existe de forma inesperada"
-mv -- "$staging" "$destination"
-cp -- "$manifest" "$destination/release.json"
-chown -R root:root "$destination"
 ln -sfn "$destination" /opt/naiskos/current.next
 mv -Tf /opt/naiskos/current.next /opt/naiskos/current
 
-/opt/node24/bin/node -e '
-  const fs=require("fs"),p=process.argv[1];
-  const migrations=process.argv[6] ? process.argv[6].split(",") : [];
-  const s={campaignId:process.argv[2],releaseId:process.argv[3],previous:process.argv[4],activatedAt:new Date().toISOString(),observeMinutes:Number(process.argv[5]),failures:0,migrations};
-  fs.writeFileSync(p+".tmp",JSON.stringify(s)+"\n",{mode:0o600}); fs.renameSync(p+".tmp",p);
-' "$observation" "$campaign" "$release" "$previous" "$observe_minutes" "$applied_migrations"
 rm -f -- "$request"
 restart_runtime
+/opt/node24/bin/node /opt/naiskos/bin/naiskos-release-runtime.mjs begin-observation
 sleep 5
 if local_health; then
   report "$campaign" "$release" observing
 else
   report "$campaign" "$release" observing "La primera comprobación de salud quedó pendiente"
 fi
+trap - EXIT HUP INT TERM

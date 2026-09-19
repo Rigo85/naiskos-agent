@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AgentConfig } from "../src/config.js";
 import { SoftwareUpdateManager } from "../src/software-update.js";
+import { acquireReleaseLock } from "../src/release-lock.js";
 
 const roots: string[] = [];
 
@@ -15,6 +16,57 @@ afterEach(async () => {
 });
 
 describe("vencimiento de actualizaciones", () => {
+  it("no consulta ni borra el staging mientras el activador tiene el bloqueo real", async () => {
+    const root = await temporaryRoot();
+    const request = path.join(root, 'updates', 'activation-request.json');
+    const unlock = (await acquireReleaseLock(root))!;
+    await writeFile(request, JSON.stringify({ releaseId: '20260918-lock-test' }));
+    const fetcher = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetcher);
+    try {
+      const manager = new SoftwareUpdateManager(config(root), async () => 'event');
+      await expect(manager.check()).resolves.toBe('none');
+      expect(fetcher).not.toHaveBeenCalled();
+      expect(JSON.parse(await readFile(request, 'utf8')).releaseId).toBe('20260918-lock-test');
+    } finally { await unlock(); }
+    const manager = new SoftwareUpdateManager(config(root), async () => 'event');
+    await manager.check();
+    await expect(readFile(request)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it("la consulta en vuelo conserva el bloqueo hasta acabar la limpieza", async () => {
+    const root = await temporaryRoot();
+    let respond!: (value: Response) => void;
+    let started!: () => void;
+    const fetching = new Promise<void>(resolve => { started = resolve; });
+    vi.stubGlobal('fetch', vi.fn(() => { started(); return new Promise<Response>(resolve => { respond = resolve; }); }));
+    const manager = new SoftwareUpdateManager(config(root), async () => 'event');
+    const check = manager.check();
+    await fetching;
+    expect(await acquireReleaseLock(root)).toBeNull();
+    respond(new Response(null, { status: 204 }));
+    await check;
+    const unlock = await acquireReleaseLock(root);
+    expect(unlock).not.toBeNull();
+    await unlock!();
+  });
+
+  it("preserva la solicitud con 409 de instalación en curso y libera bloqueo ante error HTTP", async () => {
+    const root = await temporaryRoot();
+    await mkdir(path.join(root, 'updates'));
+    const request = path.join(root, 'updates', 'activation-request.json');
+    await writeFile(request, '{}');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({code:'software_operation_in_progress'}), {status:409})));
+    const manager = new SoftwareUpdateManager(config(root), async () => 'event');
+    await expect(manager.check()).resolves.toBe('none');
+    expect(await readFile(request, 'utf8')).toBe('{}');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, {status:503})));
+    await expect(manager.check()).rejects.toThrow('503');
+    const unlock = await acquireReleaseLock(root);
+    expect(unlock).not.toBeNull();
+    await unlock!();
+  });
+
   it("descarta una solicitud preparada cuando la central deja de autorizarla", async () => {
     const root = await temporaryRoot();
     const releaseId = "20260907-expiry-test-001";
