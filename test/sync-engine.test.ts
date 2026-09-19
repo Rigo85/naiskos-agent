@@ -143,6 +143,7 @@ describe("sincronización del agente", () => {
           downloadUrl: "https://naiskos.test/display.webp",
           width: 800,
           height: 1200,
+          bandColors: ["#123456", "#654321"] as [string, string],
           posterDownloadUrl: null,
           thumbnailDownloadUrl: "https://naiskos.test/thumbnail.webp",
           extension: ".webp",
@@ -174,6 +175,7 @@ describe("sincronización del agente", () => {
     expect(local.media[0]).toMatchObject({
       width: 800,
       height: 1200,
+      bandColors: ["#123456", "#654321"],
       url: expect.stringMatching(/^\/media\/[a-f0-9]{64}\.webp$/),
       thumbnailUrl: null,
       thumbnailSizeBytes: null,
@@ -259,6 +261,7 @@ describe("sincronización del agente", () => {
     const productionSettings = {
       ...emptyManifest().settings,
       collageMode: "adaptive" as const,
+      collageBackground: "material" as const,
       photoDurationSeconds: 47,
       fadeDurationMs: 321,
       defaultFitMode: "cover" as const,

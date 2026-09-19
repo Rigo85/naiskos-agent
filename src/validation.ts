@@ -24,6 +24,10 @@ export function normalizeSettings(value: unknown): FrameSettings {
   const fit = input.defaultFitMode;
   const order = input.order;
   const collageMode = input.collageMode ?? "off";
+  const collageBackground = input.collageBackground ?? "black";
+  if (!["black", "material"].includes(String(collageBackground))) {
+    throw new Error("collageBackground inválido");
+  }
   if (!["off", "columns", "adaptive"].includes(String(collageMode))) {
     throw new Error("collageMode inválido");
   }
@@ -44,6 +48,7 @@ export function normalizeSettings(value: unknown): FrameSettings {
   return {
     photoDurationSeconds: Math.round(duration),
     collageMode: collageMode as FrameSettings["collageMode"],
+    collageBackground: collageBackground as FrameSettings["collageBackground"],
     fadeDurationMs: Math.round(fade),
     defaultFitMode: fit,
     order: order as FrameSettings["order"],
@@ -214,6 +219,10 @@ export function validateRemoteManifest(
   if (!Array.isArray(input.media)) throw new Error("Lista de medios inválida");
   for (const raw of input.media) {
     const media = object(raw, "media");
+    // Decorative metadata must never block synchronization of playable content.
+    media.bandColors = Array.isArray(media.bandColors) && media.bandColors.length === 2 &&
+      media.bandColors.every((color) => typeof color === "string" && /^#[0-9a-f]{6}$/i.test(color))
+      ? media.bandColors : null;
     for (const dimension of ["width", "height"]) {
       const value = media[dimension];
       if (value !== undefined && value !== null &&

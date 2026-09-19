@@ -8,6 +8,12 @@ import {
 } from "../src/validation.js";
 
 describe("normalizeSettings", () => {
+  it("conserva el fondo elegido y mantiene negro en configuraciones antiguas", () => {
+    const { collageBackground, ...legacy } = DEFAULT_SETTINGS;
+    expect(normalizeSettings(legacy).collageBackground).toBe("black");
+    expect(normalizeSettings({ ...legacy, collageBackground: "material" }).collageBackground).toBe("material");
+    expect(() => normalizeSettings({ ...legacy, collageBackground: "url(x)" })).toThrow("collageBackground");
+  });
   it("conserva collage y normaliza configuraciones anteriores a individual", () => {
     for (const collageMode of ["off", "columns", "adaptive"] as const) {
       expect(normalizeSettings({ ...DEFAULT_SETTINGS, collageMode }).collageMode).toBe(collageMode);
@@ -28,6 +34,13 @@ describe("normalizeSettings", () => {
 });
 
 describe("validateRemoteManifest", () => {
+  it.each([null, ["#123456", "#abcdef"], ["#123456", "url(x)"]])("tolera paleta opcional o inválida: %j", (bandColors) => {
+    const manifest = { schemaVersion: 1, frameId: "f", version: 1, settings: DEFAULT_SETTINGS,
+      media: [{ id: "p", kind: "photo", downloadUrl: "https://naiskos.test/p.webp", extension: ".webp",
+        sha256: "a".repeat(64), sizeBytes: 1, bandColors }] };
+    const result = validateRemoteManifest(manifest, "f");
+    expect(result.media[0].bandColors).toEqual(bandColors?.[1] === "#abcdef" ? bandColors : null);
+  });
   it("impide instalar el manifiesto de otro marco", () => {
     expect(() =>
       validateRemoteManifest(

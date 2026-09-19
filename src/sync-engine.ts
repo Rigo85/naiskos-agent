@@ -489,6 +489,7 @@ export class SyncEngine {
       }
       media.push({
         width: item.width ?? null,
+        bandColors: item.bandColors ?? null,
         height: item.height ?? null,
         id: item.id,
         kind: item.kind,

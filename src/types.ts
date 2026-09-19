@@ -2,6 +2,7 @@ export type FitMode = "contain" | "cover";
 
 export interface FrameSettings {
   collageMode: "off" | "columns" | "adaptive";
+  collageBackground: "black" | "material";
   photoDurationSeconds: number;
   fadeDurationMs: number;
   defaultFitMode: FitMode;
@@ -38,6 +39,7 @@ export interface WeatherSnapshot {
 }
 
 export interface RemoteMediaItem {
+  bandColors?: [string, string] | null;
   width?: number | null;
   height?: number | null;
   id: string;
@@ -63,6 +65,7 @@ export interface RemoteMediaItem {
 }
 
 export interface LocalMediaItem {
+  bandColors?: [string, string] | null;
   width?: number | null;
   height?: number | null;
   id: string;
@@ -137,6 +140,7 @@ export interface AgentStatus {
 
 export const DEFAULT_SETTINGS: FrameSettings = {
   collageMode: "off",
+  collageBackground: "black",
   photoDurationSeconds: 30,
   fadeDurationMs: 450,
   defaultFitMode: "contain",
