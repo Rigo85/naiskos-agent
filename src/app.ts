@@ -14,6 +14,7 @@ import { errorForLog } from "./logging.js";
 import type { ViewerPlaybackSnapshot, ViewerPlaybackState } from "./viewer-monitor.js";
 import { ReposeManager } from "./repose.js";
 import { writeJsonAtomic } from "./atomic-store.js";
+import { collageEvent } from './collage-events.js';
 
 type SystemAction = "exit" | "poweroff";
 type DisplayScheduleEvent =
@@ -406,6 +407,28 @@ export async function buildApp(
   app.get("/api/v1/viewer/restart-needed", async () => ({
     restart: engine.viewerMonitor.claimRestart(),
   }));
+  const recentCollageEvents = new Set<string>();
+  const pendingCollageEvents = new Map<string, Promise<void>>();
+  app.post<{ Body: unknown }>("/api/v1/viewer/collage-events", async (request, reply) => {
+    if (request.headers['x-naiskos-request'] !== 'viewer') return reply.code(403).send();
+    const body = collageEvent(request.body);
+    if (!body) return reply.code(400).send({ error: 'Evento de collage inválido' });
+    const id = String(body.id);
+    if (!recentCollageEvents.has(id)) {
+      let pending = pendingCollageEvents.get(id);
+      if (!pending) {
+        pending = (async () => {
+          await engine.enqueueEvent({ ...body, receivedAt: new Date().toISOString() }, id);
+          recentCollageEvents.add(id);
+          if (recentCollageEvents.size > 512) recentCollageEvents.delete(recentCollageEvents.values().next().value!);
+          app.log.info({ event: body }, 'Collage lifecycle');
+        })();
+        pendingCollageEvents.set(id, pending);
+      }
+      try { await pending; } finally { pendingCollageEvents.delete(id); }
+    }
+    return reply.code(202).send({ accepted: true, id });
+  });
   app.post<{ Body: unknown }>("/api/v1/viewer/playback-events", async (request, reply) => {
     if (request.headers["x-naiskos-request"] !== "viewer") {
       return reply.code(403).send({ error: "Solicitud local inválida" });

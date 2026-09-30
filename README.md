@@ -19,6 +19,8 @@ central sin interrumpir la presentación.
   funcional después de reinicios o pérdidas de conexión.
 - Recibir latidos y estados del reproductor, registrar sus recuperaciones y
   verificar/reparar por SHA-256 la copia local de un medio omitido.
+- Persistir y entregar las [trazas de mosaicos dinámicos](docs/collage-events.md),
+  con correlación por sesión, vuelta, semilla y operación de precarga.
 - Exponer al visor operaciones de encuadre, rotación, eliminación, salida y
   apagado controlado, además del reposo local persistente.
 - Recopilar diagnóstico acotado sin copiar medios ni secretos.

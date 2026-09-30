@@ -46,6 +46,24 @@ async function fixture() {
 }
 
 describe("agente HTTP", () => {
+  it("persiste trazas de collage antes de confirmar y deduplica reintentos concurrentes", async () => {
+    const { app, config } = await fixture();
+    const payload = { type: 'viewer.collage', id: '11111111-1111-4111-8111-111111111111',
+      sessionId: '22222222-2222-4222-8222-222222222222', buildId: 'test',
+      at: new Date().toISOString(), sequence: 1, action: 'plan-ready',
+      details: { round: 1, nextRound: 2, nextSeed: 321, scenes: 20, elapsedMs: 12 } };
+    const request = { method: 'POST' as const, url: '/api/v1/viewer/collage-events',
+      headers: { 'x-naiskos-request': 'viewer' }, payload };
+    const responses = await Promise.all([app.inject(request), app.inject(request), app.inject(request)]);
+    expect(responses.map((r) => r.statusCode)).toEqual([202, 202, 202]);
+    const outbox = JSON.parse(await readFile(path.join(config.dataRoot, 'outbox.json'), 'utf8'));
+    expect(outbox).toHaveLength(1);
+    expect(outbox[0]).toMatchObject(payload);
+    expect((await app.inject({ ...request, headers: {} })).statusCode).toBe(403);
+    expect((await app.inject({ ...request, payload: { ...payload, details: { url: '/private/photo' } } })).statusCode).toBe(400);
+    expect((await app.inject({ ...request, payload: { ...payload, action: 'unknown' } })).statusCode).toBe(400);
+    await app.close();
+  });
   it('conserva la confirmación de salud y el ID durable al reportar observación',async()=>{
     const {app,config}=await fixture();
     const reportId='11111111-1111-4111-8111-111111111111';
