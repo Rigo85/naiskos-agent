@@ -20,6 +20,11 @@ conflicto por UUID ignorado: no necesita migración ni desplegar el servidor.
 | `plan-ready` | Cuándo terminó, número de escenas y milisegundos de worker |
 | `lookahead-ready` | Ventana de geometrías afinadas por anticipado |
 | `preload-ready` / `preload-used` | Archivos preparados / realmente reutilizados |
+| `preload-joined` | Navegación aprovecha una carga en curso, sin reiniciar su deadline |
+| `reserve-ready` / `reserve-used` | Reserva auxiliar: `reason` diferencia lista, sólo póster, límite, fallo o cancelación; usada significa calentamiento previo, no sustituye la validación DOM |
+| `input-classified` | Gesto reconocido y duración del contacto; sin coordenadas ni movimientos crudos |
+| `navigation-requested` / `navigation-ignored` | Dirección solicitada y motivos de descarte, incluido doble toque/fundido |
+| `navigation-visible` | Tiempo desde la orden aceptada hasta iniciar el fundido; no incluye toda la duración del fundido ni tiempo previo de entrega del touch por el SO |
 | `round-adopted` | Inicio efectivo de la nueva mezcla, vuelta anterior y fallback |
 | `scene-committed` | Todos los IDs mostrados, vistos acumulados y cohorte |
 | `manual-selection` / `history-*` | Repeticiones deliberadas por navegación del usuario |
@@ -32,6 +37,13 @@ Los eventos de planificación incluyen `round`, `seed`, `basis` (huella de las
 entradas para correlación, no credencial), `planningGeneration` y `manifestVersion`. Las precargas se
 correlacionan también por `operationId`; los fallos concretos de archivos siguen
 el circuito existente `viewer.media.preparation-failed`.
+
+`direction` vale -1/1. Las consultas de precarga/historial en segundo plano no
+se registran como selecciones manuales. Para investigar una pausa percibida,
+correlacionar `input-classified → navigation-requested → preload-joined/used →
+navigation-visible → scene-committed` por sesión, operación y tiempos. No todos
+los pasos aparecen en cada ruta; la reserva sólo de póster no garantiza video
+listo y un registro de planificación no mide latencia del touch.
 
 Comprobar que `plan-ready` precede ampliamente a `round-adopted`, que no haya
 adopciones durante reposo, que cada vuelta normal cubra su cohorte sin duplicados

@@ -2,10 +2,12 @@ const ACTIONS = new Set(['checkpoint-restored', 'checkpoint-rejected', 'checkpoi
   'round-reconciled', 'manual-selection', 'history-selected', 'history-committed', 'renewal-deferred',
   'boundary-repeat-unavoidable', 'round-adopted', 'scene-committed', 'plan-requested', 'plan-ready',
   'lookahead-ready', 'plan-failed', 'refinement-fallback', 'plan-cancelled', 'planning-suspended',
-  'planning-resumed', 'media-failed', 'preload-ready', 'preload-failed', 'preload-cancelled', 'preload-used']);
+  'planning-resumed', 'media-failed', 'preload-ready', 'preload-failed', 'preload-cancelled', 'preload-used',
+  'preload-joined', 'reserve-ready', 'reserve-used', 'input-classified',
+  'navigation-requested', 'navigation-ignored', 'navigation-visible']);
 const FIELDS = new Set(['round','seed','basis','manifestVersion','restoredRound','restoredSeen',
   'materials','cohort','seen','scenes','mediaIds','historyIndex','reason','previousRound','fallback',
-  'sceneIndex','nextRound','nextSeed','elapsedMs','attempt','deliveryOverflow','operationId','planningGeneration']);
+  'sceneIndex','nextRound','nextSeed','elapsedMs','attempt','deliveryOverflow','operationId','planningGeneration','direction']);
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 
 export function collageEvent(input: unknown): Record<string, unknown> | null {
