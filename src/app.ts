@@ -72,6 +72,47 @@ export async function buildApp(
   const storedIntent = await readFile(intentFile, 'utf8').then(JSON.parse).catch(() => null);
   let intentionalExit = storedIntent?.intentionalExit === true && storedIntent?.bootId === bootId;
   let exitedSession: string | undefined = storedIntent?.sessionId;
+  const exclusionsFile = path.join(config.dataRoot, 'playback-exclusions.json');
+  const storedExclusions: unknown = await readFile(exclusionsFile, 'utf8').then(JSON.parse).catch(() => []);
+  let playbackExclusions: { mediaId: string; sha256: string; until: number }[] =
+    Array.isArray(storedExclusions) ? storedExclusions.filter(e => typeof e?.mediaId === 'string' &&
+      typeof e?.sha256 === 'string' && /^[a-f0-9]{64}$/i.test(e.sha256) &&
+      Number.isFinite(e.until) && e.until > Date.now()).slice(-128).map(e => ({ ...e, until: Math.min(e.until, Date.now() + 30 * 60_000) })) : [];
+  let exclusionWrite = Promise.resolve();
+  let exclusionsDirty = false;
+  let exclusionRetryAt = 0;
+  const playbackHealth = async () => {
+    const health = engine.viewerMonitor.playbackHealth();
+    // Keep the decision bound to the presentation evaluated before disk I/O;
+    // a heartbeat may commit a different scene while persistence is awaiting.
+    const evaluatedLeaseId = engine.viewerMonitor.snapshot().playback?.lease?.id;
+    if (!health.healthy) {
+      const snapshot = engine.viewerMonitor.snapshot().playback;
+      const item = engine.currentManifest().media.find(m => m.id === snapshot?.mediaId);
+      if (['scene-budget-expired', 'video-no-progress'].includes(health.reason ?? '') && item?.kind === 'video' && !playbackExclusions.some(e => e.mediaId === item.id && e.sha256 === item.sha256 && e.until > Date.now())) {
+        playbackExclusions = [...playbackExclusions.filter(e => e.until > Date.now()),
+          { mediaId: item.id, sha256: item.sha256, until: Date.now() + 30 * 60_000 }].slice(-128);
+        app.log.warn({ mediaId: item.id, reason: health.reason }, 'Playback safety limit exceeded');
+        exclusionsDirty = true;
+      }
+    }
+    if (exclusionsDirty && performance.now() >= exclusionRetryAt) {
+      exclusionsDirty = false;
+      exclusionWrite = exclusionWrite.then(() => writeJsonAtomic(exclusionsFile, playbackExclusions)).catch(error => {
+        exclusionsDirty = true;
+        exclusionRetryAt = performance.now() + 10_000;
+        app.log.error({ err: errorForLog(error) }, 'Unable to persist playback exclusions');
+      });
+    }
+    await exclusionWrite;
+    return { ...health, leaseId: evaluatedLeaseId };
+  };
+  const recordPlayback = (snapshot: ViewerPlaybackSnapshot) => {
+    const manifest = engine.currentManifest();
+    const item = manifest.media.find(m => m.id === snapshot.mediaId);
+    engine.viewerMonitor.configurePlayback(item?.durationSeconds ?? null, manifest.settings.photoDurationSeconds);
+    engine.viewerMonitor.record(snapshot);
+  };
   let systemControl: { sequence: number; action: SystemAction | "none" } = {
     sequence: 0,
     action: "none",
@@ -371,7 +412,7 @@ export async function buildApp(
     }
     const snapshot = viewerSnapshot(request.body);
     if (!snapshot) return reply.code(400).send({ error: "Estado del visor inválido" });
-    engine.viewerMonitor.record(snapshot);
+    recordPlayback(snapshot);
     // An explicit desktop launch creates a new live viewer after a voluntary exit.
     if (intentionalExit && snapshot.uiReady && snapshot.buildId === buildInfo.releaseId &&
         snapshot.sessionId && snapshot.sessionId !== exitedSession) {
@@ -381,6 +422,7 @@ export async function buildApp(
     return reply.code(204).send();
   });
   app.get("/api/v1/viewer/runtime", async () => {
+    const safety = await playbackHealth();
     const viewer = engine.viewerMonitor.snapshot();
     const navigation = viewer.playback?.navigation;
     const navigationHealthy = viewer.playback?.view !== "viewer" || !navigation || !["staging", "transitioning"].includes(navigation.phase) ||
@@ -388,8 +430,10 @@ export async function buildApp(
     return {
       schemaVersion: 1, agentBuildId: buildInfo.releaseId, agentInstanceId,
       intentionalExit, quiesceId, viewer,
+      playbackSafety: safety,
+      playbackExclusions: playbackExclusions.filter(e => e.until > Date.now()),
       ready: viewer.connected && viewer.playback?.uiReady === true &&
-        viewer.playback.buildId === buildInfo.releaseId && navigationHealthy && !quiesceId,
+        viewer.playback.buildId === buildInfo.releaseId && navigationHealthy && safety.healthy && !quiesceId,
     };
   });
   app.post("/api/v1/system/quiesce", async (request, reply) => {
@@ -435,7 +479,7 @@ export async function buildApp(
     }
     const body = playbackEvent(request.body);
     if (!body) return reply.code(400).send({ error: "Evento de reproducción inválido" });
-    engine.viewerMonitor.record(body);
+    recordPlayback(body);
     const id = await engine.enqueueEvent({ ...body, at: new Date().toISOString() });
     if (body.type === "viewer.playback.skipped" && body.mediaId) {
       await inspectAndReportMedia(body.mediaId, body.mediaSha256);
@@ -695,6 +739,14 @@ function viewerSnapshot(value: unknown): ViewerPlaybackSnapshot | null {
   const view = body.view;
   const numbers = [body.currentTime, body.duration, body.readyState, body.networkState];
   const navigation = viewerNavigationSnapshot(body.navigation);
+  const lease = body.lease as ViewerPlaybackSnapshot['lease'];
+  if (lease !== undefined && (!lease || typeof lease !== 'object' ||
+    typeof lease.id !== 'string' || !/^[a-zA-Z0-9:._-]{1,160}$/.test(lease.id) ||
+    !Number.isSafeInteger(lease.revision) || lease.revision < 0 ||
+    !Number.isFinite(lease.elapsedMs) || lease.elapsedMs < 0 ||
+    !Number.isFinite(lease.budgetMs) || lease.budgetMs < 0 || lease.budgetMs > 604800000 ||
+    typeof lease.suspended !== 'boolean' || typeof lease.expired !== 'boolean' ||
+    !(lease.pauseRemainingMs === null || Number.isFinite(lease.pauseRemainingMs) && lease.pauseRemainingMs >= 0))) return null;
   if (
     !(mediaId === null || (typeof mediaId === "string" && mediaId.length <= 128)) ||
     !(mediaKind === null || mediaKind === "photo" || mediaKind === "video") ||
@@ -706,6 +758,7 @@ function viewerSnapshot(value: unknown): ViewerPlaybackSnapshot | null {
   ) return null;
   return {
     ...(typeof body.buildId === "string" && body.buildId.length <= 128 ? { buildId: body.buildId } : {}),
+    ...(lease ? { lease } : {}),
     ...(typeof body.sessionId === "string" && body.sessionId.length <= 128 ? { sessionId: body.sessionId } : {}),
     uiReady: body.uiReady === true,
     quiescedFor: typeof body.quiescedFor === "string" && body.quiescedFor.length <= 128 ? body.quiescedFor : null,

@@ -1,13 +1,14 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../src/app.js";
 import { AgentConfig } from "../src/config.js";
 import { SyncEngine } from "../src/sync-engine.js";
 import { emptyManifest } from "../src/validation.js";
 import { ReposeManager } from "../src/repose.js";
+import * as atomicStore from '../src/atomic-store.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -46,6 +47,85 @@ async function fixture() {
 }
 
 describe("agente HTTP", () => {
+  it('la decisión anterior no adquiere el ID de una escena que cambió durante la escritura', async () => {
+    const {app,engine}=await fixture();
+    engine.currentManifest().media.push({id:'bad-video',kind:'video',url:'/media/bad.mp4',posterUrl:null,
+      caption:null,senderName:null,receivedAt:new Date().toISOString(),fitMode:'inherit',rotationDegrees:0,
+      durationSeconds:5,sha256:'a'.repeat(64),sizeBytes:100,posterSizeBytes:null});
+    let now=0;
+    const clock=vi.spyOn(performance,'now').mockImplementation(()=>now);
+    let unblock!:()=>void, started!:()=>void;
+    const gate=new Promise<void>(resolve=>{unblock=resolve;});
+    const writing=new Promise<void>(resolve=>{started=resolve;});
+    const original=atomicStore.writeJsonAtomic;
+    const write=vi.spyOn(atomicStore,'writeJsonAtomic').mockImplementation(async(file,value)=>{
+      if(file.endsWith('playback-exclusions.json')) {started();await gate;}
+      return original(file,value);
+    });
+    try {
+      const payload={buildId:'development',sessionId:'one',uiReady:true,mediaId:'bad-video',mediaKind:'video',
+        state:'loading',currentTime:0,duration:5,readyState:1,networkState:1,paused:false,ended:false,
+        seeking:true,view:'viewer',lease:{id:'one:1',revision:0,elapsedMs:0,budgetMs:25000,suspended:false,pauseRemainingMs:null,expired:false}};
+      await app.inject({method:'POST',url:'/api/v1/viewer/heartbeat',headers:{'x-naiskos-request':'viewer'},payload});
+      now=45000;
+      const pending=app.inject({method:'GET',url:'/api/v1/viewer/runtime'}).then(response=>response.json());
+      await writing;
+      await app.inject({method:'POST',url:'/api/v1/viewer/heartbeat',headers:{'x-naiskos-request':'viewer'},
+        payload:{...payload,mediaId:'new-photo',mediaKind:'photo',state:'photo',lease:{...payload.lease,id:'one:2'}}});
+      unblock();
+      const result=await pending;
+      expect(result.viewer.playback.lease.id).toBe('one:2');
+      expect(result.playbackSafety).toMatchObject({healthy:false,leaseId:'one:1'});
+      expect((await app.inject({method:'GET',url:'/api/v1/viewer/runtime'})).json().playbackSafety.healthy).toBe(true);
+    } finally {unblock();write.mockRestore();clock.mockRestore();await app.close();}
+  });
+  it('una pausa manual vencida solicita avanzar sin clasificar el archivo como averiado', async () => {
+    const {app,engine}=await fixture();
+    engine.currentManifest().media.push({ id:'paused-video',kind:'video',url:'/media/good.mp4',
+      posterUrl:null,caption:null,senderName:null,receivedAt:new Date().toISOString(),fitMode:'inherit',
+      rotationDegrees:0,durationSeconds:60,sha256:'b'.repeat(64),sizeBytes:100,posterSizeBytes:null });
+    let now=0;
+    const clock=vi.spyOn(performance,'now').mockImplementation(()=>now);
+    try {
+      const payload={buildId:'development',sessionId:'one',uiReady:true,mediaId:'paused-video',mediaKind:'video',
+        state:'paused',currentTime:10,duration:60,readyState:4,networkState:1,paused:true,ended:false,
+        seeking:false,view:'viewer',lease:{id:'one:1',revision:0,elapsedMs:10000,budgetMs:80000,suspended:false,pauseRemainingMs:30000,expired:false}};
+      const send=(body=payload)=>app.inject({method:'POST',url:'/api/v1/viewer/heartbeat',headers:{'x-naiskos-request':'viewer'},payload:body});
+      expect((await send({...payload,lease:{...payload.lease,budgetMs:-1}})).statusCode).toBe(400);
+      expect((await send()).statusCode).toBe(204);
+      now=46000; await send();
+      const runtime=(await app.inject({method:'GET',url:'/api/v1/viewer/runtime'})).json();
+      expect(runtime.playbackSafety).toMatchObject({healthy:false,reason:'pause-budget-expired',leaseId:'one:1'});
+      expect(runtime.playbackExclusions).toEqual([]);
+    } finally { clock.mockRestore(); await app.close(); }
+  });
+  it('runtime deja de certificar un video atascado y conserva su exclusión al reconstruir el agente', async () => {
+    const {app,engine,config,repose}=await fixture();
+    engine.currentManifest().media.push({ id:'bad-video',kind:'video',url:'/media/bad.mp4',
+      posterUrl:null,caption:null,senderName:null,receivedAt:new Date().toISOString(),fitMode:'inherit',
+      rotationDegrees:0,durationSeconds:63.914,sha256:'a'.repeat(64),sizeBytes:100,posterSizeBytes:null });
+    let now=0;
+    const clock=vi.spyOn(performance,'now').mockImplementation(()=>now);
+    try {
+      const beat={buildId:'development',sessionId:'one',uiReady:true,mediaId:'bad-video',mediaKind:'video',
+        state:'loading',currentTime:63.589997,duration:63.914,readyState:1,networkState:1,paused:false,ended:false,
+        seeking:true,view:'viewer',lease:{id:'one:1',revision:0,elapsedMs:0,budgetMs:83914,suspended:false,pauseRemainingMs:null,expired:false}};
+      const send=()=>app.inject({method:'POST',url:'/api/v1/viewer/heartbeat',headers:{'x-naiskos-request':'viewer'},payload:beat});
+      expect((await send()).statusCode).toBe(204);
+      now=45000; await send();
+      const runtime=(await app.inject({method:'GET',url:'/api/v1/viewer/runtime'})).json();
+      expect(runtime.ready).toBe(false);
+      expect(runtime.playbackSafety.healthy).toBe(false);
+      expect(runtime.playbackExclusions).toHaveLength(1);
+      const stored=JSON.parse(await readFile(path.join(config.dataRoot,'playback-exclusions.json'),'utf8'));
+      expect(stored[0].mediaId).toBe('bad-video');
+      await app.close();
+      const restarted=await buildApp(config,engine,undefined,repose);
+      const after=(await restarted.inject({method:'GET',url:'/api/v1/viewer/runtime'})).json();
+      expect(after.playbackExclusions[0].sha256).toBe('a'.repeat(64));
+      await restarted.close();
+    } finally { clock.mockRestore(); await app.close(); }
+  });
   it("persiste trazas de collage antes de confirmar y deduplica reintentos concurrentes", async () => {
     const { app, config } = await fixture();
     const payload = { type: 'viewer.collage', id: '11111111-1111-4111-8111-111111111111',

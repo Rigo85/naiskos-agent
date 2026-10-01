@@ -8,9 +8,10 @@ describe('navigation diagnostic contract', () => {
   it('accepts bounded navigation timings and reserve lifecycle', () => {
     for (const action of ['input-classified', 'navigation-requested', 'navigation-ignored',
       'navigation-visible', 'reserve-ready', 'reserve-used', 'preload-joined', 'navigation-joined',
-      'navigation-deferred', 'navigation-deferred-used', 'navigation-deferred-cleared']) {
+      'navigation-deferred', 'navigation-deferred-used', 'navigation-deferred-cleared',
+      'scene-budget-started', 'scene-budget-adjusted', 'scene-budget-suspension', 'scene-budget-expired']) {
       expect(collageEvent({ ...base, action, details: { direction: -1, elapsedMs: 150,
-        source: 'manual', reason: 'manual', operationId: 2, mediaIds: ['test'] } })).not.toBeNull();
+        source: 'manual', reason: 'manual', operationId: 2, budgetMs: 83914, mediaIds: ['test'] } })).not.toBeNull();
     }
   });
   it('rejects private coordinates, URLs and malformed timings', () => {

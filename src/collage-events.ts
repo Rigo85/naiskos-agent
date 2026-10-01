@@ -5,10 +5,11 @@ const ACTIONS = new Set(['checkpoint-restored', 'checkpoint-rejected', 'checkpoi
   'planning-resumed', 'media-failed', 'preload-ready', 'preload-failed', 'preload-cancelled', 'preload-used',
   'preload-joined', 'reserve-ready', 'reserve-used', 'input-classified',
   'navigation-requested', 'navigation-ignored', 'navigation-visible', 'navigation-joined',
-  'navigation-deferred', 'navigation-deferred-used', 'navigation-deferred-cleared']);
+  'navigation-deferred', 'navigation-deferred-used', 'navigation-deferred-cleared',
+  'scene-budget-started', 'scene-budget-suspension', 'scene-budget-adjusted', 'scene-budget-expired']);
 const FIELDS = new Set(['round','seed','basis','manifestVersion','restoredRound','restoredSeen',
   'materials','cohort','seen','scenes','mediaIds','historyIndex','reason','previousRound','fallback',
-  'sceneIndex','nextRound','nextSeed','elapsedMs','attempt','deliveryOverflow','operationId','planningGeneration','direction','source']);
+  'sceneIndex','nextRound','nextSeed','elapsedMs','budgetMs','attempt','deliveryOverflow','operationId','planningGeneration','direction','source']);
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 
 export function collageEvent(input: unknown): Record<string, unknown> | null {

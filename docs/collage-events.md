@@ -115,3 +115,35 @@ la exposición inicial completa de una foto, sin representar un toque lento.
 
 No hay un log por frame de video ni por tick de reloj. Se registran decisiones y
 cambios de estado para mantener acotado el coste en disco y memoria.
+
+## Seguridad temporal de reproducción
+
+`scene-budget-started`, `scene-budget-adjusted`, `scene-budget-suspension` y
+`scene-budget-expired` registran comienzo, búsqueda/pausa, suspensión/reanudación
+y vencimiento. `operationId` en estos eventos es el contador de presentación,
+no el contador de navegación; correlacionarlo con `sessionId`. `budgetMs` y
+`elapsedMs` permiten distinguir tiempo consumido de tiempo dormido. Los eventos
+`viewer.playback.recovery`, `recovered` y `skipped` conservan razón y estado de video.
+
+`GET /api/v1/viewer/runtime` incluye `playbackSafety` (salud, razón, identidad de
+presentación) y `playbackExclusions`. La salud usa progreso y reloj monotónico
+propios del agente, no el elapsed que declara el navegador: límite de contenido
+del manifiesto +20 s, con 15 s de tolerancia externa, o 30 s sin progreso real.
+La pausa manual tiene el intervalo fotográfico +15 s. Menús, reposo, quiesce y
+preparación/transición se suspenden, pero la navegación tiene su propio plazo.
+Un reintento degradado vivo no es un bloqueo; si deja de ejecutarse también vence.
+Se rechazan heartbeats tardíos de una presentación/sesión ya reemplazada.
+
+Cuando detecta un video bloqueado, guarda atómicamente su ID/hash y vencimiento
+en `playback-exclusions.json` antes de responder al watchdog. Conserva hasta 128
+entradas durante 30 min; el visor recibe las exclusiones también tras reiniciarse.
+Un error de escritura se registra y reintenta tras 10 s, sin impedir responder
+la salud. Una pausa manual excedida o un fallo de navegación no cuarentena un
+video por sí solos. No se modifica la biblioteca ni se acusa corrupción del archivo
+sólo por un bloqueo de decodificación.
+
+Para revisar un incidente: buscar el inicio de presentación, suspensiones,
+ajustes y vencimiento; cruzar con eventos de reproducción y `viewer.runtime`.
+Si JavaScript se detiene, puede faltar el último evento del visor: usar la razón
+del agente y el journal del servicio `naiskos-viewer-watchdog.service`. El watchdog
+existente conserva su ventana de 120 s y límite de reinicios; no se creó otro daemon.
