@@ -24,7 +24,9 @@ conflicto por UUID ignorado: no necesita migración ni desplegar el servidor.
 | `reserve-ready` / `reserve-used` | Reserva auxiliar: `reason` diferencia lista, sólo póster, límite, fallo o cancelación; usada significa calentamiento previo, no sustituye la validación DOM |
 | `input-classified` | Gesto reconocido y duración del contacto; sin coordenadas ni movimientos crudos |
 | `navigation-requested` / `navigation-ignored` | Dirección solicitada y motivos de descarte, incluido doble toque/fundido |
-| `navigation-visible` | Tiempo desde la orden aceptada hasta iniciar el fundido; no incluye toda la duración del fundido ni tiempo previo de entrega del touch por el SO |
+| `navigation-joined` | Toque atendido por el avance automático coincidente, incluso si se suelta justo después del commit; no genera otro paso |
+| `navigation-deferred` / `navigation-deferred-used` / `navigation-deferred-cleared` | Intención única guardada/reemplazada, consumida o cancelada; `operationId` identifica el fundido al que pertenece |
+| `navigation-visible` | Tiempo desde la orden aceptada hasta iniciar el fundido o confirmar una presentación directa; no incluye toda la duración del fundido ni tiempo previo de entrega del touch por el SO |
 | `round-adopted` | Inicio efectivo de la nueva mezcla, vuelta anterior y fallback |
 | `scene-committed` | Todos los IDs mostrados, vistos acumulados y cohorte |
 | `manual-selection` / `history-*` | Repeticiones deliberadas por navegación del usuario |
@@ -88,7 +90,28 @@ ORDER BY occurred_at, (payload->>'sequence')::bigint;
 - Un evento rechazado con 400 se descarta para no bloquear los siguientes.
   Cada petición tiene un límite de cinco segundos. Errores de red/servidor
   conservan el UUID y reintentan con espera de 1–30 segundos. No confundir una laguna
-  diagnóstica con una escena no reproducida: revisar sesión, secuencia y desbordes.
+diagnóstica con una escena no reproducida: revisar sesión, secuencia y desbordes.
+
+## Origen y medición de las órdenes
+
+Las nuevas órdenes y mediciones incluyen `source`: `manual` (gesto), `gallery`
+(selección explícita), `automatic` (temporizador/final de video) o `system`
+(arranque, aplicación de manifiesto y recuperación/reintento). No deducir intención
+humana de que una operación pueda sustituir otra. La presentación directa cierra
+también su medición: no arrastra el tiempo de exposición hasta el primer fundido.
+
+`navigation-visible.reason` distingue `direct`/`crossfade`; mide la decisión del
+visor, no el instante físico en que el panel pinta un píxel. Una orden diferida
+conserva el momento de su último gesto válido: su latencia incluye la espera para
+terminar el fundido previo y preparar el nuevo destino. `navigation-deferred-used`
+mide sólo la espera hasta consumirla y referencia la operación anterior; el
+`navigation-visible` posterior referencia la nueva operación. Una petición
+reemplazada, cancelada o unida al automático no genera una medición ficticia de
+otro cambio. Filtrar por `source` antes de calcular estadísticas manuales.
+
+Las releases anteriores carecen de esta separación. En particular, excluir el
+primer `navigation-visible` de `20260930-navigation-reserve-001`: podía incluir
+la exposición inicial completa de una foto, sin representar un toque lento.
 
 No hay un log por frame de video ni por tick de reloj. Se registran decisiones y
 cambios de estado para mantener acotado el coste en disco y memoria.

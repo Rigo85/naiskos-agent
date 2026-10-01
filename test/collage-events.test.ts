@@ -7,13 +7,14 @@ describe('navigation diagnostic contract', () => {
     at: '2026-10-01T00:00:00Z', sequence: 1 };
   it('accepts bounded navigation timings and reserve lifecycle', () => {
     for (const action of ['input-classified', 'navigation-requested', 'navigation-ignored',
-      'navigation-visible', 'reserve-ready', 'reserve-used', 'preload-joined']) {
+      'navigation-visible', 'reserve-ready', 'reserve-used', 'preload-joined', 'navigation-joined',
+      'navigation-deferred', 'navigation-deferred-used', 'navigation-deferred-cleared']) {
       expect(collageEvent({ ...base, action, details: { direction: -1, elapsedMs: 150,
-        reason: 'manual', operationId: 2, mediaIds: ['test'] } })).not.toBeNull();
+        source: 'manual', reason: 'manual', operationId: 2, mediaIds: ['test'] } })).not.toBeNull();
     }
   });
   it('rejects private coordinates, URLs and malformed timings', () => {
-    for (const details of [{ x: 45 }, { url: '/private' }, { elapsedMs: Infinity }]) {
+    for (const details of [{ x: 45 }, { url: '/private' }, { elapsedMs: Infinity }, { source: 'unknown' }]) {
       expect(collageEvent({ ...base, action: 'navigation-visible', details })).toBeNull();
     }
   });
