@@ -10,6 +10,7 @@ export type ViewerPlaybackState =
   | "error";
 
 export interface ViewerPlaybackSnapshot {
+  mediaSha256?: string | null;
   lease?: { id: string; revision: number; elapsedMs: number; budgetMs: number;
     suspended: boolean; pauseRemainingMs: number | null; expired: boolean };
   buildId?: string;

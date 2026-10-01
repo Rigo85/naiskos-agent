@@ -88,7 +88,7 @@ export async function buildApp(
     const evaluatedLeaseId = engine.viewerMonitor.snapshot().playback?.lease?.id;
     if (!health.healthy) {
       const snapshot = engine.viewerMonitor.snapshot().playback;
-      const item = engine.currentManifest().media.find(m => m.id === snapshot?.mediaId);
+      const item = engine.currentManifest().media.find(m => m.id === snapshot?.mediaId && m.sha256 === snapshot?.mediaSha256);
       if (['scene-budget-expired', 'video-no-progress'].includes(health.reason ?? '') && item?.kind === 'video' && !playbackExclusions.some(e => e.mediaId === item.id && e.sha256 === item.sha256 && e.until > Date.now())) {
         playbackExclusions = [...playbackExclusions.filter(e => e.until > Date.now()),
           { mediaId: item.id, sha256: item.sha256, until: Date.now() + 30 * 60_000 }].slice(-128);
@@ -109,7 +109,8 @@ export async function buildApp(
   };
   const recordPlayback = (snapshot: ViewerPlaybackSnapshot) => {
     const manifest = engine.currentManifest();
-    const item = manifest.media.find(m => m.id === snapshot.mediaId);
+    const item = manifest.media.find(m => m.id === snapshot.mediaId &&
+      (!snapshot.mediaSha256 || m.sha256 === snapshot.mediaSha256));
     engine.viewerMonitor.configurePlayback(item?.durationSeconds ?? null, manifest.settings.photoDurationSeconds);
     engine.viewerMonitor.record(snapshot);
   };
@@ -740,6 +741,7 @@ function viewerSnapshot(value: unknown): ViewerPlaybackSnapshot | null {
   const numbers = [body.currentTime, body.duration, body.readyState, body.networkState];
   const navigation = viewerNavigationSnapshot(body.navigation);
   const lease = body.lease as ViewerPlaybackSnapshot['lease'];
+  if (body.mediaSha256 != null && (typeof body.mediaSha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(body.mediaSha256))) return null;
   if (lease !== undefined && (!lease || typeof lease !== 'object' ||
     typeof lease.id !== 'string' || !/^[a-zA-Z0-9:._-]{1,160}$/.test(lease.id) ||
     !Number.isSafeInteger(lease.revision) || lease.revision < 0 ||
@@ -763,6 +765,7 @@ function viewerSnapshot(value: unknown): ViewerPlaybackSnapshot | null {
     uiReady: body.uiReady === true,
     quiescedFor: typeof body.quiescedFor === "string" && body.quiescedFor.length <= 128 ? body.quiescedFor : null,
     mediaId: mediaId as string | null,
+    mediaSha256: typeof body.mediaSha256 === 'string' ? body.mediaSha256 : null,
     mediaKind: mediaKind as "photo" | "video" | null,
     state: state as ViewerPlaybackState,
     currentTime: body.currentTime as number,

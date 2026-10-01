@@ -47,6 +47,25 @@ async function fixture() {
 }
 
 describe("agente HTTP", () => {
+  it('no excluye la variante nueva cuando el video bloqueado pertenece al manifiesto anterior', async () => {
+    const {app,engine}=await fixture();
+    engine.currentManifest().media.push({id:'same-id',kind:'video',url:'/media/new.mp4',posterUrl:null,
+      caption:null,senderName:null,receivedAt:new Date().toISOString(),fitMode:'inherit',rotationDegrees:0,
+      durationSeconds:5,sha256:'a'.repeat(64),sizeBytes:100,posterSizeBytes:null});
+    let now=0;
+    const clock=vi.spyOn(performance,'now').mockImplementation(()=>now);
+    try {
+      const payload={buildId:'development',sessionId:'one',uiReady:true,mediaId:'same-id',mediaSha256:'a'.repeat(64),mediaKind:'video',
+        state:'loading',currentTime:0,duration:5,readyState:1,networkState:1,paused:false,ended:false,
+        seeking:true,view:'viewer',lease:{id:'one:1',revision:0,elapsedMs:0,budgetMs:25000,suspended:false,pauseRemainingMs:null,expired:false}};
+      expect((await app.inject({method:'POST',url:'/api/v1/viewer/heartbeat',headers:{'x-naiskos-request':'viewer'},payload})).statusCode).toBe(204);
+      engine.currentManifest().media[0].sha256='b'.repeat(64);
+      now=45000;
+      const result=(await app.inject({method:'GET',url:'/api/v1/viewer/runtime'})).json();
+      expect(result.playbackSafety.healthy).toBe(false);
+      expect(result.playbackExclusions).toEqual([]);
+    } finally {clock.mockRestore();await app.close();}
+  });
   it('la decisión anterior no adquiere el ID de una escena que cambió durante la escritura', async () => {
     const {app,engine}=await fixture();
     engine.currentManifest().media.push({id:'bad-video',kind:'video',url:'/media/bad.mp4',posterUrl:null,
@@ -63,7 +82,7 @@ describe("agente HTTP", () => {
       return original(file,value);
     });
     try {
-      const payload={buildId:'development',sessionId:'one',uiReady:true,mediaId:'bad-video',mediaKind:'video',
+      const payload={buildId:'development',sessionId:'one',uiReady:true,mediaId:'bad-video',mediaSha256:'a'.repeat(64),mediaKind:'video',
         state:'loading',currentTime:0,duration:5,readyState:1,networkState:1,paused:false,ended:false,
         seeking:true,view:'viewer',lease:{id:'one:1',revision:0,elapsedMs:0,budgetMs:25000,suspended:false,pauseRemainingMs:null,expired:false}};
       await app.inject({method:'POST',url:'/api/v1/viewer/heartbeat',headers:{'x-naiskos-request':'viewer'},payload});
@@ -107,7 +126,7 @@ describe("agente HTTP", () => {
     let now=0;
     const clock=vi.spyOn(performance,'now').mockImplementation(()=>now);
     try {
-      const beat={buildId:'development',sessionId:'one',uiReady:true,mediaId:'bad-video',mediaKind:'video',
+      const beat={buildId:'development',sessionId:'one',uiReady:true,mediaId:'bad-video',mediaSha256:'a'.repeat(64),mediaKind:'video',
         state:'loading',currentTime:63.589997,duration:63.914,readyState:1,networkState:1,paused:false,ended:false,
         seeking:true,view:'viewer',lease:{id:'one:1',revision:0,elapsedMs:0,budgetMs:83914,suspended:false,pauseRemainingMs:null,expired:false}};
       const send=()=>app.inject({method:'POST',url:'/api/v1/viewer/heartbeat',headers:{'x-naiskos-request':'viewer'},payload:beat});

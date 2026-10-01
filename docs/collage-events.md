@@ -133,6 +133,10 @@ La pausa manual tiene el intervalo fotográfico +15 s. Menús, reposo, quiesce y
 preparación/transición se suspenden, pero la navegación tiene su propio plazo.
 Un reintento degradado vivo no es un bloqueo; si deja de ejecutarse también vence.
 Se rechazan heartbeats tardíos de una presentación/sesión ya reemplazada.
+El heartbeat identifica también el hash reproducido: sólo se persiste una
+exclusión si coincide con esa variante, nunca con un reemplazo recién sincronizado
+que conserve el mismo ID. Los visores antiguos sin hash pueden informar salud,
+pero no se infiere la variante que deberían excluir.
 
 Cuando detecta un video bloqueado, guarda atómicamente su ID/hash y vencimiento
 en `playback-exclusions.json` antes de responder al watchdog. Conserva hasta 128
