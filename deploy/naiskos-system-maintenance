@@ -90,6 +90,7 @@ transient_failure() {
 
 exec 9>/run/naiskos-system-maintenance.lock
 flock -n 9 || transient_failure "Otro mantenimiento del sistema conserva el bloqueo" lock_busy
+[ ! -e /run/naiskos-emergency-reboot.pending ] || exit 0
 
 if [ "$mode" = general ]; then
   permit_error="$state_root/permit-$attempt_id.error"

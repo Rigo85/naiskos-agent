@@ -249,7 +249,7 @@ export async function buildApp(
         actor: null,
       });
       systemControl = { sequence: systemControl.sequence + 1, action };
-      intentionalExit = action === "exit";
+      intentionalExit = action === "exit" || action === "poweroff";
       exitedSession = engine.viewerMonitor.snapshot().playback?.sessionId;
       await writeJsonAtomic(intentFile, { intentionalExit, sessionId: exitedSession, bootId });
       return reply.code(202).send({ accepted: true, ...systemControl });

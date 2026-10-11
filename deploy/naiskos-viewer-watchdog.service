@@ -5,6 +5,7 @@ Wants=naiskos-agent.service
 
 [Service]
 Type=simple
+EnvironmentFile=/etc/naiskos/agent.env
 ExecStart=/opt/naiskos/bin/naiskos-viewer-watchdog
 Restart=always
 RestartSec=5

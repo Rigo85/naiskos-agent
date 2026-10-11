@@ -70,7 +70,7 @@ exit 0
   await mkdir('/var/lib/naiskos/updates', { recursive: true });
   await mkdir('/opt/naiskos/releases/20260915-previous', { recursive: true });
   await writeFile('/var/lib/naiskos/updates/observation.json', JSON.stringify({
-    phase: 'rollback', releaseId: '20260916-broken', previous: '20260915-previous',
+    phase: 'rollback', wasActivated: true, releaseId: '20260916-broken', previous: '20260915-previous',
     campaignId: '11111111-1111-4111-8111-111111111111', migrations: [],
   }));
   await exec(process.execPath, ['/workspace-agent/deploy/naiskos-release-runtime.mjs', 'tick'], { timeout: 30_000 });

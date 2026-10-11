@@ -14,6 +14,7 @@ force=0
 
 exec 9>/run/naiskos-release-activate.lock
 /usr/bin/flock --nonblock 9 || exit 0
+[ ! -e /run/naiskos-emergency-reboot.pending ] || exit 0
 
 # Shared with SoftwareUpdateManager. The /run lock still serializes timers and
 # handoff; this persistent inode additionally excludes download/cleanup.

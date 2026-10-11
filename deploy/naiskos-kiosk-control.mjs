@@ -1,8 +1,9 @@
 #!/opt/node24/bin/node
-import { readdir, readFile, readlink, writeFile, rename, stat } from 'node:fs/promises';
+import { readdir, readFile, readlink, writeFile, rename, stat, lstat } from 'node:fs/promises';
 import { execFile as execCallback } from 'node:child_process';
 import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
+import { runRecovery, durable } from './naiskos-recovery.mjs';
 
 const exec = promisify(execCallback);
 const launcher = '/opt/naiskos/bin/start-naiskos-kiosk';
@@ -10,6 +11,7 @@ const contextFile = '/run/naiskos-kiosk-context.json';
 const unit = 'naiskos-kiosk-session.service';
 const base = 'http://127.0.0.1:8080';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const stopFailure = '/run/naiskos-kiosk-stop-failure.json';
 
 export function parseProcess(pid, raw, argv, uid, exe = null) {
   const fields = raw.slice(raw.lastIndexOf(')') + 2).trim().split(/\s+/);
@@ -92,14 +94,25 @@ export async function status({ captureContext = true } = {}) {
   const owners = all.filter(p => isLauncher(p) && stillRunning(p));
   if (owners.length > 1) throw new Error('Más de un lanzador Naiskos');
   if (captureContext && owners[0] && process.getuid() === 0) await remember(owners[0]);
-  const tree = owners[0] ? ownedTree(all, owners[0]) : [];
+  const tracked = await readFile(stopFailure, 'utf8').then(JSON.parse).catch(() => []);
+  const owned = owners[0] ? ownedTree(all, owners[0]) : [];
+  const tree = all.filter(p => owned.some(t => t.pid === p.pid) ||
+    tracked.some(t => t.pid === p.pid && t.start === p.start && t.uid === p.uid));
+  let blocked = false;
+  for (const p of tree) {
+    const tids = await readdir(`/proc/${p.pid}/task`).catch(() => []);
+    for (const tid of tids) {
+      const raw = await readFile(`/proc/${p.pid}/task/${tid}/stat`, 'utf8').catch(() => '');
+      if (raw && parseProcess(Number(tid), raw, '', p.uid).state === 'D') blocked = true;
+    }
+  }
   const browsers = tree.filter(isKioskBrowser);
   const orphans = owners.length ? [] : all.filter(p => stillRunning(p) &&
     chromiumArguments(p)?.some(a => a.startsWith('--user-data-dir=') && a.endsWith('/naiskos/chromium')));
   return { launcherPresent: owners.length === 1, browserLive: browsers.length === 1 && browsers.some(live),
     orphanedProcesses: orphans.map(p => p.pid),
     browserSuspended: browsers.some(p => ['T', 't'].includes(p.state)),
-    browserPid: browsers.find(live)?.pid ?? null, processes: tree };
+    browserPid: browsers.find(live)?.pid ?? null, blocked, processes: tree };
 }
 async function signalTracked(targets, signal) {
   const all = await processes();
@@ -146,6 +159,7 @@ async function stop() {
   if (!await waitStopped(children, 8_000)) {
     await signalTracked(children, 'SIGKILL');
     if (!await waitStopped(children, 5_000)) {
+      await durable(stopFailure, children.map(({ pid, start, uid }) => ({ pid, start, uid })));
       throw new Error('Procesos del kiosco bloqueados en kernel; no se abrirá otra instancia');
     }
   }
@@ -174,33 +188,23 @@ export async function main(command) {
   if (command === 'status') return status();
   if (process.getuid() !== 0) throw new Error('El control del kiosco requiere root');
   if (command === 'watchdog') {
-    let lastGood = performance.now();
-    let attempts = 0;
-    let healthySince = null;
     while (true) {
       await sleep(15_000);
       try {
-        const current = await status();
-        const runtime = await api('/api/v1/viewer/runtime');
-        if (runtime.intentionalExit || current.browserSuspended) {
-          lastGood = performance.now(); healthySince = null; continue;
-        }
-        if (runtime.ready && current.browserLive) {
-          healthySince ??= performance.now();
-          if (performance.now() - healthySince >= 120_000) attempts = 0;
-          lastGood = performance.now(); continue;
-        }
-        healthySince = null;
-        if (!current.launcherPresent && !await context().catch(() => null)) continue;
-        if (performance.now() - lastGood < 120_000 || attempts >= 3 || runtime.quiesceId) continue;
-        attempts += 1;
-        lastGood = performance.now();
-        await exec('/usr/bin/flock', ['-n', '/run/naiskos-release-activate.lock',
-          '/opt/node24/bin/node', '/opt/naiskos/bin/naiskos-kiosk-control.mjs', 'restart'], { timeout: 60_000 });
-        console.log(JSON.stringify({ event: 'kiosk.restart', attempt: attempts }));
-      } catch (error) { console.error(JSON.stringify({ event: 'kiosk.watchdog', error: error.message })); }
+        const updateLock = await lstat('/var/lib/naiskos/updates/.software-update.lock');
+        if (!updateLock.isFile() || updateLock.isSymbolicLink()) throw new Error('Bloqueo de software inválido');
+        const result = await exec('/usr/bin/flock', ['-n', '-E', '75', '/run/naiskos-system-maintenance.lock',
+          '/usr/bin/flock', '-n', '-E', '75', '/run/naiskos-release-activate.lock',
+          '/usr/bin/flock', '-n', '-E', '75', '/var/lib/naiskos/updates/.software-update.lock',
+          '/opt/node24/bin/node', '/opt/naiskos/bin/naiskos-kiosk-control.mjs', 'recover'], { timeout: 90_000 });
+        if (result.stdout) console.log(result.stdout.trim());
+      } catch (error) {
+        if (error.code !== 75) console.error(JSON.stringify({ event: 'kiosk.watchdog', error: error.message }));
+      }
     }
   }
+  if (command === 'recover') return runRecovery({ status,
+    runtime: () => api('/api/v1/viewer/runtime'), restart: async () => { await stop(); await start(); } });
   if (command === 'stop') { await stop(); return { stopped: true }; }
   if (command === 'start') { await start(); return { started: true }; }
   if (command === 'restart') { await stop(); await start(); return { restarted: true }; }
