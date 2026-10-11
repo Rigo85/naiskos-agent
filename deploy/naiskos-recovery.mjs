@@ -59,13 +59,13 @@ async function send(events) {
   const stored = await json('/var/lib/naiskos/device-credentials.json');
   const url = process.env.NAISKOS_CENTRAL_URL?.replace(/\/$/, '');
   if (!url?.startsWith('https://') || !stored?.frameId || !stored?.agentToken) throw new Error('Central no configurada');
-  const response = await fetch(`${url}/api/v1/frames/${encodeURIComponent(stored.frameId)}/events`, {
+  const response = await fetch(`${url}/api/v1/frames/${encodeURIComponent(stored.frameId)}/recovery-events`, {
     method: 'POST', headers: { authorization: `Bearer ${stored.agentToken}`, 'content-type': 'application/json' },
     body: JSON.stringify({ events }), signal: AbortSignal.timeout(3_000),
   });
   if (!response.ok) throw new Error('Entrega pendiente');
   const result = await response.json();
-  if (!Array.isArray(result.accepted)) throw new Error('Acuse inválido');
+  if (result.schemaVersion !== 1 || !Array.isArray(result.accepted)) throw new Error('Acuse inválido');
   return result.accepted;
 }
 // Called ONLY while holding maintenance, release and software locks, in that order.
@@ -93,8 +93,9 @@ export async function recoveryTick(io) {
     if (state.incident && state.incident.status !== 'recovered')
       notice(state, 'recovered', 'Visor funcional durante al menos 120 segundos');
   }
-  if (state.incident?.status === 'verifying' && now - state.verifySince >= 300_000 && !healthy)
-    notice(state, 'failed', intentionalExit ? 'Verificación pendiente por salida voluntaria' : 'No se confirmó recuperación funcional tras el arranque');
+  if (state.incident?.status === 'verifying' && intentionalExit) state.verifySince = now;
+  if (state.incident?.status === 'verifying' && now - state.verifySince >= 300_000 && !healthy && !intentionalExit)
+    notice(state, 'failed', 'No se confirmó recuperación funcional tras el arranque');
   await save();
   await flush(state, save, io.send ?? send);
   // A release handoff is owned by its coordinator even between invocations.

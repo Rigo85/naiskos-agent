@@ -63,6 +63,13 @@ describe('emergencia con persistencia y dependencias simuladas (nunca reinicia e
     const f = fixture(); f.io.write.mockRejectedValue(Error('ENOSPC'));
     await expect(f.tick()).rejects.toThrow('ENOSPC'); expect(f.io.reboot).not.toHaveBeenCalled();
   });
+  it('salida voluntaria tras reiniciar no produce falsa alerta de verificación', async () => {
+    const f = fixture(); await f.tick();
+    for (const time of [120_000, 240_000, 360_000, 480_000]) { f.clock(time); await f.tick(); }
+    f.boot('boot-b'); f.clock(0); f.runtime({ ready: false, intentionalExit: true }); await f.tick();
+    f.clock(600_000); await f.tick(); expect(f.state().incident.status).toBe('verifying');
+    expect(f.state().events.some((e: any) => e.status === 'failed')).toBe(false);
+  });
   it('preserva límite tras arranque, confirma progreso y notifica reincidencia sin bucle', async () => {
     const f = fixture(); await f.tick();
     for (const time of [120_000, 240_000, 360_000, 480_000]) { f.clock(time); await f.tick(); }
